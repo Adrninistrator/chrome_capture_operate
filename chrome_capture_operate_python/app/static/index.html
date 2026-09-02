@@ -1,0 +1,1899 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>chrome_capture_operate</title>
+<style>
+* { box-sizing: border-box; }
+body { font-family: "Microsoft YaHei", sans-serif; margin: 0; background: #f4f6f8; color: #222; }
+header { background: #1f3a5f; color: #fff; padding: 10px 20px; display: flex; align-items: center; gap: 16px; }
+header h1 { font-size: 18px; margin: 0; }
+#status { font-size: 12px; opacity: .9; }
+header button { background: rgba(255,255,255,.15); color: #fff; border: 1px solid rgba(255,255,255,.4);
+  border-radius: 4px; padding: 4px 12px; cursor: pointer; font-size: 12px; }
+header button:hover { background: rgba(255,255,255,.28); }
+nav { background: #fff; border-bottom: 1px solid #ddd; padding: 0 12px; display: flex; }
+nav button { border: 0; background: none; padding: 12px 18px; cursor: pointer; font-size: 14px; border-bottom: 2px solid transparent; }
+nav button.active { border-bottom-color: #1f3a5f; color: #1f3a5f; font-weight: 600; }
+.tab { display: none; padding: 16px 20px; }
+.tab.active { display: block; }
+.card { background: #fff; border: 1px solid #e0e0e0; border-radius: 6px; padding: 14px; margin-bottom: 14px; }
+button.btn { background: #1f3a5f; color: #fff; border: 0; border-radius: 4px; padding: 6px 14px; cursor: pointer; margin-right: 8px; }
+button.btn.warn { background: #b3392e; }
+button.btn:disabled, button.btn.warn:disabled { background: #ccd3da; color: #f4f6f8; cursor: default; box-shadow: none; }
+button.link { background: none; border: 0; color: #1f6fd6; cursor: pointer; padding: 2px 6px; }
+button.link:disabled { color: #b3bcc5; cursor: default; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { border: 1px solid #e3e6ea; padding: 5px 8px; text-align: left; }
+th { background: #f0f3f6; }
+td.url { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#recTable tbody tr { cursor: pointer; }
+#recTable tbody tr:hover, #histRecTable tbody tr:hover, #scTable tbody tr:hover { background: #f0f6ff; }
+#histRecTable tbody tr { cursor: pointer; }
+#scTable tbody tr { cursor: pointer; }
+.split { display: flex; gap: 14px; }
+.split > .left { width: 320px; flex: none; }
+.split > .right { flex: 1; min-width: 0; }
+.list { border: 1px solid #e0e0e0; border-radius: 4px; max-height: 420px; overflow: auto; background: #fff; }
+.list .item { padding: 6px 10px; cursor: pointer; border-bottom: 1px solid #f0f0f0; font-size: 13px; }
+.list .item:hover { background: #f0f6ff; }
+.list .item.sel { background: #dceaff; }
+.list .item.marked { background: #fff3d6; }
+.list .item.marked.sel { background: #ffe9b3; }
+label.ck { display: block; margin: 4px 0; font-size: 13px; }
+textarea { width: 100%; font-family: Consolas, monospace; font-size: 12px; }
+input[type=text], input[type=number] { padding: 4px 6px; border: 1px solid #ccc; border-radius: 4px; }
+#overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 100; }
+#popup { background: #fff; margin: 4vh auto; width: 86%; max-width: 1100px; height: 88vh; border-radius: 8px; display: flex; flex-direction: column; overflow: hidden; }
+#popup header { background: #1f3a5f; }
+#popup .body { flex: 1; overflow: hidden; display: flex; flex-direction: column; padding: 10px; gap: 10px; }
+#popup .pane { flex: 1; overflow: auto; border: 1px solid #ddd; border-radius: 4px; padding: 8px; background: #fbfcfd; }
+pre { margin: 0; font-family: Consolas, monospace; font-size: 12px; white-space: pre-wrap; word-break: break-all; }
+/* 可编辑 markdown 编辑器：高亮层与输入层同度量叠放，两层字体/行高/换行必须
+   一致（md-h 不放大字号、md-code 去内边距），否则文字与高亮错位 */
+.md-edit { position: relative; flex: 1; overflow: hidden; border: 1px solid #ddd; border-radius: 4px; background: #fbfcfd; }
+.md-edit pre { position: absolute; inset: 0; padding: 10px; overflow: hidden; pointer-events: none; }
+.md-edit textarea { position: absolute; inset: 0; padding: 10px; border: none; background: transparent; color: transparent; caret-color: #333; resize: none; outline: none; white-space: pre-wrap; word-break: break-all; }
+.md-edit pre, .md-edit textarea { line-height: 1.6; }
+.md-edit pre .md-h { font-size: 12px; }
+.md-edit pre .md-code { padding: 0; }
+pre .rl { color: #0b5cad; font-weight: 700; }
+pre .hn { color: #7c3aed; font-weight: 600; }
+pre .st { color: #187a3c; font-weight: 700; }
+pre .py-kw { color: #7c3aed; font-weight: 700; }
+pre .py-str { color: #b3392e; }
+pre .py-com { color: #187a3c; }
+pre .py-num { color: #0b5cad; }
+pre .py-dec { color: #0b5cad; font-weight: 600; }
+pre .md-h { color: #0b5cad; font-weight: 700; font-size: 14px; }
+pre .md-code { background: #eef1f4; border-radius: 3px; padding: 0 2px; }
+pre .md-li { color: #1f3a5f; }
+pre .md-link { color: #1f6fd6; text-decoration: underline; }
+.badge.py { background: #dceaff; color: #1f6fd6; }
+.badge.md { background: #d1f2df; color: #187a3c; }
+.muted { color: #888; font-size: 12px; }
+.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.rule-row { display: flex; gap: 6px; margin: 4px 0; align-items: center; }
+#uriRulesBox, #pgUriRulesBox { max-height: 126px; overflow: auto; border: 1px solid #eee; border-radius: 4px; padding: 4px 6px; margin: 4px 0; background: #fafbfc; }
+#hostList, #pgHostList { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; max-height: 216px; }
+#hostList.disabled, #pgHostList.disabled { opacity: .45; pointer-events: none; }
+#hostList label.ck, #pgHostList label.ck { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin: 2px 0; }
+#execOut { background: #111; color: #d4ffd4; padding: 10px; border-radius: 4px; height: 320px; overflow: auto; }
+.badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; background: #e5e7eb; }
+.badge.ok { background: #d1f2df; color: #187a3c; }
+.badge.bad { background: #fbdeda; color: #b3392e; }
+#toasts { position: fixed; top: 56px; right: 16px; z-index: 9999; display: flex; flex-direction: column; gap: 8px; }
+.toast { background: #1f3a5f; color: #fff; padding: 8px 16px; border-radius: 6px; font-size: 13px; box-shadow: 0 2px 10px rgba(0,0,0,.25); opacity: .96; max-width: 460px; animation: tslide .2s; }
+.toast.ok { background: #187a3c; }
+.toast.err { background: #b3392e; }
+@keyframes tslide { from { transform: translateX(30px); opacity: 0; } }
+/* 子目录区域左右拖动调整宽度（避免展示不完整） */
+.vdrag { width: 8px; flex: none; cursor: col-resize; border-radius: 3px; background: transparent; }
+.vdrag:hover, .vdrag.on { background: #b9c8da; }
+/* 快速执行页子目录类别徽标 */
+.badge.cat-example { background: #dceaff; color: #1f6fd6; }
+.badge.cat-user { background: #d1f2df; color: #187a3c; }
+#schedTable tbody tr:hover { background: #f0f6ff; }
+.wd-box label.ck { display: inline-flex; margin-right: 10px; }
+.time-row input[type=time] { padding: 3px 5px; border: 1px solid #ccc; border-radius: 4px; font-family: Consolas, monospace; }
+/* 使用说明 markdown 正文样式（区别于代码高亮的 pre 场景） */
+.md-body { font-size: 14px; line-height: 1.8; }
+.md-body img { max-width: 100%; border: 1px solid #d8dde3; border-radius: 4px; margin: 6px 0; }
+.md-body h1 { font-size: 20px; border-bottom: 2px solid #1f3a5f; padding-bottom: 6px; margin: 8px 0 14px; }
+.md-body h2 { font-size: 17px; margin: 20px 0 8px; color: #1f3a5f; }
+.md-body h3 { font-size: 15px; margin: 16px 0 6px; }
+.md-body h4 { font-size: 14px; margin: 14px 0 4px; }
+.md-body p { margin: 8px 0; }
+.md-body ul, .md-body ol { margin: 6px 0 6px 24px; }
+.md-body li { margin: 3px 0; }
+.md-body code { background: #eef1f4; border-radius: 3px; padding: 1px 5px; font-family: Consolas, monospace; font-size: 13px; }
+.md-body pre { background: #f6f8fa; border: 1px solid #e3e6ea; border-radius: 4px; padding: 10px; overflow: auto; }
+.md-body pre code { background: none; padding: 0; }
+.md-body table { border-collapse: collapse; margin: 10px 0; font-size: 13px; }
+.md-body th, .md-body td { border: 1px solid #d8dde3; padding: 6px 10px; text-align: left; }
+.md-body th { background: #f0f3f6; }
+.md-body blockquote { border-left: 4px solid #1f6fd6; margin: 8px 0; padding: 4px 12px; background: #f7faff; color: #444; }
+/* 使用说明页：侧边目录 + 锚点跳转 */
+.usage-split { display: flex; gap: 16px; align-items: flex-start; }
+.usage-toc { display: block; width: 230px; flex: none; position: sticky; top: 10px; max-height: calc(100vh - 30px);
+  overflow: auto; border: 1px solid #e3e6ea; border-radius: 4px; background: #fbfcfd; padding: 8px 6px; }
+.usage-toc .toc-title { font-size: 13px; font-weight: 700; color: #1f3a5f; padding: 2px 8px 6px; border-bottom: 1px solid #eee; margin-bottom: 4px; }
+.usage-toc a { display: block; padding: 4px 8px; margin: 1px 0; border-radius: 3px; font-size: 13px;
+  color: #445; text-decoration: none; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.usage-toc a:hover { background: #f0f6ff; color: #1f6fd6; }
+.usage-toc a.active { background: #dceaff; color: #1f3a5f; font-weight: 600; }
+.usage-toc a.lv2 { padding-left: 20px; }
+.usage-toc a.lv3 { padding-left: 32px; }
+.usage-toc a.lv4 { padding-left: 44px; }
+.md-body h1, .md-body h2, .md-body h3, .md-body h4 { scroll-margin-top: 12px; }
+@media (max-width: 900px) { .usage-split { display: block; } .usage-toc { display: none; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>chrome_capture_operate</h1>
+  <span id="status">加载中…</span>
+  <button id="btnInstallExt" style="margin-left:auto" title="打开安装说明：展示Chrome插件管理页面地址与插件目录（均可复制），并说明人工安装步骤">安装Chrome插件</button>
+</header>
+<nav>
+  <button data-tab="capture" class="active" title="切换到抓包页面">抓包</button>
+  <button data-tab="history" title="切换到抓包记录页面">抓包记录</button>
+  <button data-tab="exec" title="切换到快速执行脚本页面">快速执行脚本</button>
+  <button data-tab="sched" title="切换到定时执行脚本页面">定时执行脚本</button>
+  <button data-tab="settings" title="切换到参数配置页面">参数配置</button>
+  <button data-tab="cookies" title="切换到Chrome Cookie接收状态页面">Chrome Cookie接收状态</button>
+  <button data-tab="multi" title="切换到Chrome进程多开页面">Chrome进程多开</button>
+  <button data-tab="usage" title="切换到使用说明页面">使用说明</button>
+</nav>
+
+<!-- ============ 抓包 ============ -->
+<div class="tab active" id="tab-capture">
+  <div class="card row">
+    <button class="btn" id="btnChrome" title="查找Chrome安装目录并启动带CDP调试端口的独立实例，用于抓包（已启动则不重复启动）">启动用于抓包的Chrome</button>
+    <button class="btn" id="btnCheckChrome" title="立即检测抓包Chrome进程与CDP连接状态（状态变化自动推送，轮询兜底每30秒一次）">检测Chrome进程</button>
+    <span id="chromeState" class="badge">未检测</span>
+    <button class="btn" id="btnStart" disabled title="开始保存抓包Chrome的网络访问数据到文件（需先启动用于抓包的Chrome）">开始抓包</button>
+    <button class="btn" id="btnPauseResume" disabled title="暂停当前抓包（记录保留，之后可继续）">暂停抓包</button>
+    <button class="btn warn" id="btnEnd" disabled title="结束本次抓包并清空页面显示的抓包记录（Chrome进程保留）">结束抓包</button>
+    <button class="btn" id="btnPurge" disabled title="按当前抓包配置删除不满足条件的记录（页面与文件同步删除，序号不变）">删除不满足条件的记录</button>
+    <button class="btn" id="btnMark" disabled title="需要提供给AI使用的抓包记录可以点击人工标记">人工标记本次抓包</button>
+    <button class="btn" id="btnSearchCap" disabled title="在当前抓包的请求/返回头与body中搜索关键字">搜索内容</button>
+    <span id="capState" class="muted"></span>
+    <span class="muted">（状态变化自动推送；每30秒兜底轮询）</span>
+    <span id="chromeHint" style="display:none;flex-basis:100%;color:#b3392e;font-size:13px">
+      请在<b>新启动的用于抓包的Chrome浏览器窗口</b>中进行操作，不要在日常使用的Chrome浏览器中操作
+    </span>
+  </div>
+  <div class="card">
+    <b>抓包配置</b> <span class="muted">（会话级，抓包中调整对后续数据即时生效；以下配置参数的具体值可在参数配置页面进行设置）</span>
+    <div class="split" style="margin-top:8px">
+      <div style="width:280px;flex:none">
+        <label class="ck"><input type="checkbox" id="ckType" checked> 根据Chrome请求类型过滤（静态资源）</label>
+        <label class="ck"><input type="checkbox" id="ckSuffix" checked> 根据URL后缀过滤静态资源</label>
+        <label class="ck"><input type="checkbox" id="ckCt" checked> 根据返回content-type过滤静态资源</label>
+        <label class="ck"><input type="checkbox" id="ckWs" disabled> 抓取WebSocket（暂不实现）</label>
+        <b style="font-size:13px">忽略的URI（以 / 开头）</b>
+        <div id="uriRulesBox">
+          <div id="uriRules"></div>
+          <div class="muted" id="uriEmpty">（无规则）</div>
+        </div>
+        <div class="rule-row">
+          <select id="ruleType">
+            <option value="prefix">以开头</option>
+            <option value="equals">等于</option>
+            <option value="contains">包含</option>
+            <option value="suffix">以结尾</option>
+          </select>
+          <input type="text" id="ruleValue" placeholder="/xxx" size="12">
+          <button class="btn" onclick="addRule()" title="添加一条URI忽略规则（以 / 开头），命中的请求将被过滤">添加</button>
+        </div>
+      </div>
+      <div style="flex:1">
+        <div class="row" style="justify-content:space-between">
+          <b style="font-size:13px">需要抓包的网址 <span class="muted" id="hostCount"></span></b>
+        </div>
+        <div class="row" style="align-items:center;gap:10px">
+          <label class="ck" style="margin:0"><input type="checkbox" id="ckAllHosts" checked> 全部（不筛选）</label>
+          <span>
+            <button class="link" id="hostsAll" title="勾选列表中的全部网址">全选</button>
+            <button class="link" id="hostsNone" title="取消勾选列表中的全部网址">取消全选</button>
+          </span>
+        </div>
+        <div class="list" id="hostList"></div>
+        <div class="muted">展示监听调试端口的浏览器启动后实际访问过的网址（仅 http/https）</div>
+      </div>
+    </div>
+  </div>
+  <div class="card">
+    <b>当前抓包记录</b> <span class="muted">（实时刷新）</span>
+    <table id="recTable" style="margin-top:8px">
+      <thead><tr><th>序号</th><th>请求时间</th><th>方法</th><th>资源类型</th><th>URL</th><th>content-type</th><th>请求body字节数</th><th>返回body字节数</th><th>耗时ms</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ============ 抓包记录 ============ -->
+<div class="tab" id="tab-history">
+  <div class="split" id="histSplit">
+    <div class="left" id="histLeft">
+      <div class="row"><b>抓包目录</b><button class="btn" onclick="loadHistory()" title="重新加载抓包子目录列表">刷新</button><button class="btn warn" id="btnBatchDel" title="打开批量删除窗口，可勾选多个子目录一次性删除">批量删除</button></div>
+      <div class="list" id="sessList" style="margin-top:8px"></div>
+    </div>
+    <div class="vdrag" id="histDrag" title="按住左右拖动调整子目录区域宽度"></div>
+    <div class="right">
+      <div class="row">
+        <b id="sessTitle">文件列表</b>
+        <button class="link" id="btnViewIndex" disabled title="查看当前子目录的index.md汇总文件">查看index.md</button>
+        <button class="btn" id="btnPrompt" disabled title="生成提供给AI的固化脚本提示词（可在弹窗中编辑后复制）">获得生成固化脚本提示词</button>
+        <button class="btn" id="btnSearchHist" disabled title="在当前子目录的请求/返回头与body中搜索关键字">搜索内容</button>
+        <button class="btn warn" id="btnPurgeHist" disabled title="按过滤条件删除当前子目录中不满足条件的记录（可预览删除效果）">删除不满足条件的记录</button>
+        <button class="btn" id="btnRename" disabled title="重命名当前选中的子目录（正在抓包中的不允许）">重命名</button>
+        <button class="btn" id="btnMarkSess" disabled title="人工标记/取消标记当前选中的子目录（只能对已结束的抓包操作）">人工标记</button>
+        <button class="btn warn" id="btnDelSess" disabled title="删除当前选中的子目录（正在抓包中的不允许，删除后不可恢复）">删除该目录</button>
+      </div>
+      <div class="row" id="renameRow" style="display:none;margin-top:6px">
+        <span class="muted">目录名（建议保留时间戳前缀；标记态以新名是否以 _人工标记 结尾为准）</span>
+        <input type="text" id="renameInput" style="width:340px" maxlength="80">
+        <button class="btn" id="btnRenameOk" title="按编辑框中的名称重命名子目录">确认</button>
+        <button class="btn" id="btnRenameCancel" title="取消本次重命名操作">取消</button>
+      </div>
+      <table id="histRecTable" style="margin-top:8px">
+        <thead><tr><th>序号</th><th>请求时间</th><th>方法</th><th>资源类型</th><th>URL</th><th>content-type</th><th>请求body字节数</th><th>返回body字节数</th><th>耗时ms</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div id="histEmpty" class="muted" style="display:none;padding:8px">（该目录暂无记录）</div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 快速执行 ============ -->
+<div class="tab" id="tab-exec">
+  <div class="card">
+    <b>配置固化脚本保存目录</b> <span class="muted">（保存到全局配置文件 global_conf.json，当前操作系统全局生效）</span>
+    <div class="row" style="margin-top:8px">
+      <input type="text" id="cfgScriptsDir" style="width:420px" placeholder="例如 E:\git-dir\my-frozen-scripts">
+      <button class="btn" id="btnSaveScriptsDir" title="保存固化Python脚本文件根目录到全局配置文件（需为存在的合法目录路径）">保存</button>
+      <span id="scriptsDirMsg" class="muted"></span>
+    </div>
+    <div class="muted" style="margin-top:6px">指定的目录为保存生成的固化Python脚本文件根目录，建议使用为Git项目目录，以便于版本管理与共享。未配置时"获得生成固化脚本提示词"会提示先在此配置。</div>
+  </div>
+  <div class="split">
+    <div class="left">
+      <div class="row"><b>脚本目录</b><button class="btn" onclick="loadScripts()" title="重新加载脚本子目录列表">刷新</button><button class="btn warn" id="btnDelScriptDir" disabled title="删除当前选中的脚本子目录（删除后不可恢复）">删除子目录</button></div>
+      <div class="list" id="scriptDirs" style="margin-top:8px"></div>
+    </div>
+    <div class="right">
+      <b>脚本文件</b> <span id="pyHint" class="muted"></span>
+      <div class="list" id="pyList" style="margin:8px 0; max-height:180px"></div>
+      <div class="row">
+        <button class="btn" id="btnRun" disabled title="执行选中的py脚本（不传参，使用项目虚拟环境）">执行</button>
+        <button class="btn warn" id="btnKill" style="display:none" title="强制结束正在执行的py脚本进程">结束进程</button>
+        <span id="execState" class="muted"></span>
+      </div>
+      <pre id="execOut" style="margin-top:10px"></pre>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 定时执行脚本 ============ -->
+<div class="tab" id="tab-sched">
+  <div class="card row">
+    <button class="btn" id="btnAddSched" title="新增一个定时执行脚本任务（新增后默认启动）">新增</button>
+    <button class="btn" onclick="loadSchedules()" title="重新加载定时执行任务列表">刷新</button>
+    <span class="muted">新增后默认启动；暂停/恢复/删除只操作任务，不删除对应的Python脚本；执行日志按次写入 log/scripts/ 下</span>
+  </div>
+  <div class="card">
+    <table id="schedTable">
+      <thead><tr><th>脚本</th><th>定时方式</th><th>状态</th><th>上次执行</th><th>下次执行</th><th>操作</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div class="muted" id="schedEmpty" style="display:none;padding:8px">（暂无定时执行任务，点击"新增"创建）</div>
+  </div>
+</div>
+
+<!-- ============ 参数配置 ============ -->
+<div class="tab" id="tab-settings">
+  <div class="card">
+    <b>参数配置</b> <span class="muted">（保存到 conf/conf.json）</span>
+    <table style="margin-top:10px; max-width:860px">
+      <tr><th style="width:200px">监听端口</th><td>
+        <input type="number" id="cfgPort" style="width:110px">
+        <div class="muted">同端口提供 HTTP / WebSocket（URI 区分）。修改后需<b>重新启动 Python 脚本</b>生效；并需<b>同步修改 Chrome 插件 chrome_capture_operate_extension 中的推送目标地址</b>。</div>
+      </td></tr>
+      <tr><th>是否自动启动</th><td><label class="ck"><input type="checkbox" id="cfgAuto"> 开机自启动（注册表实现）</label></td></tr>
+      <tr><th>Chrome请求类型过滤清单</th><td><textarea id="cfgTypeFilter" rows="5"></textarea><div class="muted">每行一个类型，如 Stylesheet；常见值：Document(网页加载)/XHR/Fetch/Stylesheet/Script/Image/Font/Media/TextTrack/Manifest/Prefetch/EventSource/Ping/Other。默认仅含静态资源，<b>不要把 Document/XHR/Fetch 加进去</b>（会滤掉网页与接口）；Other 与 EventSource 也不建议加入（Other 含各类杂项请求，EventSource 为 SSE 流式数据，可能承载业务数据如 AI 对话）；修改后即时生效</div></td></tr>
+      <tr><th>URL后缀过滤清单</th><td><textarea id="cfgSuffix" rows="5"></textarea><div class="muted">每行一个后缀，如 .js；修改后即时生效</div></td></tr>
+      <tr><th>content-type过滤清单</th><td><textarea id="cfgCt" rows="5"></textarea><div class="muted">每行一项，如 image/；修改后即时生效</div></td></tr>
+      <tr><th>Chrome CDP调试端口</th><td><input type="number" id="cfgCdp" style="width:110px"> <span class="muted">默认 9222，重启生效</span></td></tr>
+      <tr><th>固化脚本执行超时(秒)</th><td><input type="number" id="cfgTimeout" style="width:110px"> <span class="muted">默认 300</span></td></tr>
+    </table>
+    <div style="margin-top:10px"><button class="btn" onclick="saveConf()" title="保存参数到conf/conf.json（端口修改需重启Python脚本生效）">保存</button><span id="confMsg" class="muted"></span></div>
+  </div>
+</div>
+
+<!-- ============ Cookie 接收状态 ============ -->
+<div class="tab" id="tab-cookies">
+  <div class="card">
+    <div class="row">
+      <b>Chrome Cookie 接收状态</b>
+      <button class="btn" onclick="loadReceives()" title="重新加载最近50次Cookie接收记录">刷新</button>
+      <span id="cookieSummary" class="muted"></span>
+    </div>
+    <table id="recvTable" style="margin-top:10px">
+      <thead><tr><th>时间</th><th>实例编号</th><th>原因</th><th>地址</th><th>数量</th><th>成功/失败</th><th>操作</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ============ Chrome进程多开 ============ -->
+<div class="tab" id="tab-multi">
+  <div class="card">
+    <b>Chrome进程多开</b>
+    <div class="muted">需要在同一个网站登录多个账号时，为每个账号创建一个独立的Chrome实例分别登录。每个实例需要分别安装Chrome插件，并在插件的"参数配置"页为本实例选择对应编号。</div>
+    <div class="row" style="margin-top:10px">
+      <button class="btn" id="btnMpAdd" title="新增一个多开Chrome实例：输入名称与本地数据存储目录">新增</button>
+    </div>
+  </div>
+  <div class="card">
+    <table id="mpTable">
+      <thead><tr><th>编号</th><th>名称</th><th>数据存储目录</th><th>创建时间</th><th>操作</th></tr></thead>
+      <tbody id="mpBody"><tr><td colspan="5" class="muted">暂无实例</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ============ 使用说明 ============ -->
+<div class="tab" id="tab-usage">
+  <div class="card usage-split">
+    <nav class="usage-toc" id="usageToc" aria-label="使用说明目录"></nav>
+    <div id="usageBody" class="md-body"></div>
+  </div>
+</div>
+
+<!-- 弹窗 -->
+<div id="overlay">
+  <div id="popup">
+    <header><h1 id="popTitle">查看</h1><button class="btn warn" onclick="closePop()" title="关闭当前弹窗">关闭</button></header>
+    <div class="body" id="popBody"></div>
+  </div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+let curSession = null, curScript = null, execId = null, execTimer = null, curCaptureSession = null, histRecords = [], curScriptDir = null;
+
+/* ---------- 基础 ---------- */
+async function api(path, opt) {
+  const r = await fetch(path, opt ? {headers: {'Content-Type': 'application/json'}, ...opt} : undefined);
+  return r.json();
+}
+function toast(el, msg, bad) { el.textContent = msg; el.style.color = bad ? '#b3392e' : '#187a3c'; setTimeout(() => el.textContent = '', 5000); }
+/* 非模态 toast 提示（弹窗提示要求：不用模态窗口，不阻塞网页操作） */
+function toastMsg(msg, type, ms) {
+  let box = document.getElementById('toasts');
+  if (!box) { box = document.createElement('div'); box.id = 'toasts'; document.body.appendChild(box); }
+  const t = document.createElement('div');
+  t.className = 'toast ' + (type || '');
+  t.textContent = msg;
+  box.appendChild(t);
+  setTimeout(() => { t.style.transition = 'opacity .3s'; t.style.opacity = '0'; setTimeout(() => t.remove(), 350); }, ms || 3000);
+}
+/* 二次点击确认（非模态，替代 confirm） */
+function armConfirm(btn, label, seconds) {
+  btn.dataset.original = btn.dataset.original || btn.textContent;
+  btn.textContent = label; btn.classList.add('warn'); btn.dataset.armed = '1';
+  clearTimeout(btn._armTimer);
+  btn._armTimer = setTimeout(() => {
+    btn.textContent = btn.dataset.original; btn.classList.remove('warn'); delete btn.dataset.armed;
+  }, (seconds || 3) * 1000);
+}
+function disarmConfirm(btn) {
+  clearTimeout(btn._armTimer);
+  btn.textContent = btn.dataset.original; btn.classList.remove('warn'); delete btn.dataset.armed;
+}
+function copyText(t, silent) {
+  navigator.clipboard.writeText(t).then(() => { if (!silent) toastMsg('已复制到剪贴板', 'ok'); })
+    .catch(() => { const ta = document.createElement('textarea'); ta.value = t; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); if (!silent) toastMsg('已复制到剪贴板', 'ok'); });
+}
+
+// 页头"安装Chrome插件"：打开安装说明弹窗——展示插件管理页面地址与插件
+// 目录（各带复制按钮）+ 人工安装步骤。自动打开 chrome:// 的方案均不可行
+// （前端 href/window.open 被 Chromium 安全策略拦截；webbrowser.open 走
+// os.startfile 弹"选择打开方式"；chrome.exe 直启时页面转交不可靠），
+// 改为信息展示 + 复制 + 人工步骤引导，详见 docs/design-chrome-extensions-open.md
+$('#btnInstallExt').onclick = async () => {
+  const r = await api('/api/extension-dir');
+  if (r.error) { toastMsg('获取插件目录失败：' + r.error, 'err', 5000); return; }
+  $('#popTitle').textContent = '安装Chrome插件';
+  $('#popBody').innerHTML =
+    '<div style="max-width:680px;font-size:13px;line-height:1.9">' +
+    '<h3 style="margin:4px 0">需要用到的信息</h3>' +
+    '<table><tr><th style="width:150px">Chrome插件管理页面</th><td>' +
+      '<code>chrome://extensions</code></td>' +
+      '<td style="width:70px"><button class="btn" id="cpExtUrl" title="复制Chrome插件管理页面地址，粘贴到Chrome地址栏打开">复制</button></td></tr>' +
+    '<tr><th>Chrome插件目录</th><td><code>' + esc(r.path) + '</code></td>' +
+      '<td><button class="btn" id="cpExtDir" title="复制插件目录路径，在加载扩展时粘贴选择">复制</button></td></tr></table>' +
+    '<h3 style="margin:14px 0 4px">安装步骤</h3>' +
+    '<ol>' +
+    '<li>复制上方的<b>Chrome插件管理页面</b>地址，粘贴到 Chrome 的地址栏打开' +
+    '<li>在插件管理页面右上角开启<b>开发者模式</b>（安装未打包插件必须开启）' +
+    '<li>点击<b>加载未打包的扩展程序</b>按钮' +
+    '<li>复制上方的<b>Chrome插件目录</b>路径，粘贴到弹出的文件夹选择框（或直接定位到该目录），点击选择文件夹' +
+    '<li>插件列表出现 <b>chrome_capture_operate</b> 即安装成功；点击 Chrome 右上角"扩展程序"按钮可打开插件页面进行配置' +
+    '</ol>' +
+    '<div class="muted">说明：Chrome 出于安全限制不允许网页直接打开 chrome:// 页面，以上地址需复制后手动在地址栏打开。</div>' +
+    '</div>';
+  $('#cpExtUrl').onclick = () => copyText('chrome://extensions');
+  $('#cpExtDir').onclick = () => copyText(r.path);
+  $('#overlay').style.display = 'block';
+};
+
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('nav button').forEach(x => x.classList.toggle('active', x === b));
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.id === 'tab-' + b.dataset.tab));
+  if (b.dataset.tab === 'history') loadHistory();
+  if (b.dataset.tab === 'exec') loadScripts();
+  if (b.dataset.tab === 'sched') loadSchedules();
+  if (b.dataset.tab === 'settings') loadConf();
+  if (b.dataset.tab === 'cookies') loadReceives();
+  if (b.dataset.tab === 'multi') loadMultiProfiles();
+  if (b.dataset.tab === 'usage') loadUsage();
+});
+
+/* ---------- Chrome进程多开 ---------- */
+async function loadMultiProfiles() {
+  const r = await api('/api/multi-profiles');
+  const body = $('#mpBody');
+  const list = (r.profiles || []);
+  if (!list.length) {
+    body.innerHTML = '<tr><td colspan="5" class="muted">暂无实例</td></tr>';
+    return;
+  }
+  body.innerHTML = list.map(p =>
+    `<tr><td>${p.id}</td><td>${esc(p.name)}</td>` +
+    `<td style="max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(p.dir)}">${esc(p.dir)}</td>` +
+    `<td>${esc(p.created || '')}</td>` +
+    `<td><button class="btn" onclick="openMultiProfile(${p.id})" title="启动该实例的Chrome（首次会拷贝收藏夹/历史/用户名）">打开</button> ` +
+    `<button class="btn warn" onclick="delMultiProfile(${p.id})" title="删除该实例记录（保留Chrome profile目录及文件，本地数据存储目录不受影响）">删除</button></td></tr>`
+  ).join('');
+}
+
+async function openMultiProfile(id) {
+  const r = await api(`/api/multi-profiles/${id}/open`, { method: 'POST' });
+  toastMsg(r.message || (r.ok ? '已启动' : '启动失败'), r.ok ? 'ok' : 'err', 5000);
+  if (r.ok) {
+    toastMsg('首次使用请在该Chrome中按"安装Chrome插件"安装本工具插件，并在插件"参数配置"页的"Chrome实例编号"中填写 ' + id + '（编号与Web页列表对应，修改后下一次推送生效）', 'ok', 12000);
+  }
+}
+
+async function delMultiProfile(id) {
+  // 二次点击确认（非模态，与删除抓包记录按钮同一交互）：删除仅去掉
+  // 实例记录，本地Chrome数据存储目录及文件保留
+  const b = document.querySelector(`#mpBody button[onclick*="delMultiProfile(${id})"]`);
+  if (b && !b.dataset.armed) { armConfirm(b, '再次点击确认删除', 4); return; }
+  if (b) disarmConfirm(b);
+  const r = await api(`/api/multi-profiles/${id}/delete`, { method: 'POST' });
+  if (r.ok) toastMsg('已删除（本地Chrome数据存储目录已保留）', 'ok', 6000);
+  else toastMsg(r.error || '删除失败', 'err');
+  loadMultiProfiles();
+}
+
+$('#btnMpAdd').onclick = () => {
+  // 页面内表单弹窗（复用 overlay/popup），不用浏览器原生 prompt
+  $('#popTitle').textContent = '新增Chrome多开实例';
+  $('#popBody').innerHTML =
+    '<div style="max-width:560px;font-size:13px;line-height:1.9">' +
+    '<div class="muted">同一网站需要登录多个账号时，为每个账号创建一个独立的Chrome实例分别登录。每个实例需要分别安装Chrome插件，并在插件中选择对应编号。</div>' +
+    '<div style="margin-top:10px"><b>名称</b>（用于区分，如"账号A"）</div>' +
+    '<input type="text" id="mpName" placeholder="如：账号A" title="实例名称，用于列表中区分" style="width:100%;padding:5px 6px;border:1px solid #ccc;border-radius:4px;box-sizing:border-box">' +
+    '<div style="margin-top:10px"><b>Chrome数据存储目录</b>（完整本地路径，目录需已存在）</div>' +
+    '<input type="text" id="mpDir" placeholder="如：D:\chrome_accounts\A" title="保存该实例浏览器数据的本地目录完整路径" style="width:100%;padding:5px 6px;border:1px solid #ccc;border-radius:4px;box-sizing:border-box;font-family:Consolas,monospace">' +
+    '<div class="muted">该目录用于保存此实例的浏览器数据（收藏夹/访问历史/用户名会自动复制过去）。建议每个实例使用独立目录。</div>' +
+    '<div style="margin-top:14px"><button class="btn" id="mpSubmit" title="创建该多开Chrome实例">创建</button></div>' +
+    '</div>';
+  $('#mpSubmit').onclick = async () => {
+    const name = $('#mpName').value.trim();
+    const dir = $('#mpDir').value.trim();
+    if (!name) { toastMsg('名称不能为空', 'err'); return; }
+    if (!dir) { toastMsg('请输入数据存储目录的完整路径', 'err'); return; }
+    const r = await api('/api/multi-profiles', { method: 'POST',
+      body: JSON.stringify({ name, dir }) });
+    if (r.error) { toastMsg(r.error, 'err', 5000); return; }
+    closePop();
+    toastMsg('已创建实例 编号' + r.profile.id, 'ok');
+    loadMultiProfiles();
+  };
+  $('#overlay').style.display = 'block';
+};
+
+/* ---------- 子目录区域左右拖动（避免展示不完整） ---------- */
+function makeDraggable(handle, leftPane, storeKey) {
+  const apply = w => { leftPane.style.width = w + 'px'; leftPane.style.flex = 'none'; };
+  const saved = +localStorage.getItem(storeKey);
+  if (saved >= 140) apply(saved);
+  let dragging = false, startX = 0, startW = 0;
+  handle.addEventListener('mousedown', e => {
+    dragging = true; startX = e.clientX;
+    startW = leftPane.getBoundingClientRect().width;
+    handle.classList.add('on');
+    e.preventDefault();
+  });
+  document.addEventListener('mousemove', e => {
+    if (!dragging) return;
+    const w = Math.max(140, Math.min(window.innerWidth * 0.75, startW + e.clientX - startX));
+    apply(Math.round(w));
+    localStorage.setItem(storeKey, Math.round(w));
+  });
+  document.addEventListener('mouseup', () => { dragging = false; handle.classList.remove('on'); });
+}
+makeDraggable($('#histDrag'), $('#histLeft'), 'hist_left_width');
+
+/* ---------- HTTP 文本高亮 ---------- */
+function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+function highlight(text) {
+  const lines = text.split('\n');
+  return lines.map((line, i) => {
+    if (i === 0 || /^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s/.test(line)) return `<span class="rl">${esc(line)}</span>`;
+    if (/^HTTP\/[\d.]+\s/.test(line)) return `<span class="st">${esc(line)}</span>`;
+    const m = line.match(/^([\w-]+):(.*)$/);
+    if (m) return `<span class="hn">${esc(m[1])}:</span>${esc(m[2])}`;
+    return esc(line);
+  }).join('\n');
+}
+/* 拆分请求/返回部分为 {head, body}（去掉 # 标记行与 [...] 元信息行） */
+function splitHeadBody(part) {
+  const lines = part.split('\n');
+  let i = 0;
+  if (i < lines.length && lines[i].startsWith('#')) i++;
+  while (i < lines.length && lines[i].startsWith('[')) i++;
+  const rest = lines.slice(i).join('\n');
+  const idx = rest.indexOf('\n\n');
+  if (idx < 0) return {head: rest, body: ''};
+  return {head: rest.slice(0, idx), body: rest.slice(idx + 2)};
+}
+/* HTTP 访问数据统一展示：分上下请求/返回、语法高亮、复制头/body/头+body 按钮 */
+function showRecord(title, content) {
+  $('#popTitle').textContent = title;
+  let req = '', resp = '';
+  const m = content.split('\n# response');
+  req = m[0].replace(/^# request\n?/, '');
+  resp = m.length > 1 ? m[1] : '';
+  const parts = {req, resp};
+  const labels = {'# request': 'req', '# response': 'resp'};
+  $('#popBody').innerHTML =
+    `<div class="pane" style="display:flex;flex-direction:column;min-height:0">` +
+    `<div class="row" style="padding:2px 0;flex:none"><b># request</b>` +
+    `<button class="link" data-copy="req-head" title="复制请求头（请求行与头字段）">复制头</button>` +
+    `<button class="link" data-copy="req-body" title="复制请求body">复制body</button>` +
+    `<button class="link" data-copy="req-all" title="复制完整请求（头+body）">复制头+body</button></div>` +
+    `<pre style="flex:1;overflow:auto">${highlight(req)}</pre></div>` +
+    `<div class="pane" style="display:flex;flex-direction:column;min-height:0">` +
+    `<div class="row" style="padding:2px 0;flex:none"><b># response</b>` +
+    `<button class="link" data-copy="resp-head" title="复制返回头（状态行与头字段）">复制头</button>` +
+    `<button class="link" data-copy="resp-body" title="复制返回body">复制body</button>` +
+    `<button class="link" data-copy="resp-all" title="复制完整返回（头+body）">复制头+body</button></div>` +
+    `<pre style="flex:1;overflow:auto">${highlight(resp)}</pre></div>`;
+  const hb = {req: splitHeadBody(req), resp: splitHeadBody(resp)};
+  document.querySelectorAll('#popBody [data-copy]').forEach(btn => {
+    const [key, what] = btn.dataset.copy.split('-');
+    const h = hb[key];
+    btn.onclick = () => copyText(what === 'head' ? h.head
+      : what === 'body' ? h.body : h.head + '\n\n' + h.body);
+  });
+  $('#overlay').style.display = 'block';
+}
+function showText(title, text, withCopy) {
+  $('#popTitle').textContent = title;
+  if (withCopy) {
+    // 可编辑文本框 + markdown 高亮：高亮层与输入层同度量叠放，
+    // 输入层文字透明仅留光标，输入实时重高亮，滚动同步
+    $('#popBody').innerHTML =
+      '<div class="md-edit"><pre id="mdHl"></pre>' +
+      '<textarea id="popEdit" spellcheck="false"></textarea></div>' +
+      '<div class="row" style="padding:4px 0"><button class="btn" id="popCopy" title="复制编辑框中的全部内容到剪贴板">复制</button>' +
+      '<span class="muted">已自动复制当前内容；请在"人工在网页的操作描述"与"生成Python脚本具体要求"两节填写后复制</span></div>';
+    const ta = $('#popEdit'), hl = $('#mdHl');
+    const render = () => { hl.innerHTML = highlightMarkdown(ta.value) + '\n'; };
+    ta.value = text;
+    render();
+    ta.oninput = render;
+    ta.onscroll = () => { hl.scrollTop = ta.scrollTop; hl.scrollLeft = ta.scrollLeft; };
+    $('#popCopy').onclick = () => copyText(ta.value);
+    copyText(text, true);  // 打开时自动复制不打扰；点复制按钮才提示
+  } else {
+    $('#popBody').innerHTML = `<div class="pane"><pre>${esc(text)}</pre></div>`;
+  }
+  $('#overlay').style.display = 'block';
+}
+function closePop() {
+  // 搜索结果的查看内容关闭：恢复搜索结果展示（需求：关闭后仍展示刚才的搜索记录）
+  if (searchCtx && searchCtx.viewing) {
+    searchCtx.viewing = false;
+    restoreSearch();
+    return;
+  }
+  searchCtx = null;  // 关闭搜索弹窗本身：清空上下文
+  $('#overlay').style.display = 'none';
+}
+
+/* ---------- Python / Markdown 语法高亮（本地实现，无外部依赖） ---------- */
+function highlightPython(code) {
+  const KW = /^(def|class|import|from|return|if|elif|else|for|while|try|except|finally|with|as|lambda|pass|break|continue|raise|yield|global|nonlocal|assert|del|in|is|not|and|or|None|True|False|self|async|await|print)$/;
+  function flushOther(text) {
+    const re = /(@[\w.]+)|\b(def|class)(\s+)([\w_]+)|\b([A-Za-z_]\w*)\b|\b(\d+\.?\d*)\b/g;
+    let out = '', last = 0, m;
+    while ((m = re.exec(text)) !== null) {
+      out += esc(text.slice(last, m.index));
+      if (m[1]) out += '<span class="py-dec">' + esc(m[1]) + '</span>';
+      else if (m[2]) out += '<span class="py-kw">' + m[2] + '</span>' + m[3] + '<b>' + esc(m[4]) + '</b>';
+      else if (m[5] && KW.test(m[5])) out += '<span class="py-kw">' + m[5] + '</span>';
+      else if (m[6]) out += '<span class="py-num">' + m[6] + '</span>';
+      else out += esc(m[0]);
+      last = re.lastIndex;
+    }
+    return out + esc(text.slice(last));
+  }
+  let out = '', i = 0, n = code.length, buf = '';
+  while (i < n) {
+    if (code.startsWith("'''", i) || code.startsWith('"""', i)) {
+      const q = code.substr(i, 3);
+      let j = code.indexOf(q, i + 3); j = j === -1 ? n : j + 3;
+      out += flushOther(buf); buf = '';
+      out += '<span class="py-str">' + esc(code.slice(i, j)) + '</span>';
+      i = j; continue;
+    }
+    const ch = code[i];
+    if (ch === '#') {
+      let j = code.indexOf('\n', i); j = j === -1 ? n : j;
+      out += flushOther(buf); buf = '';
+      out += '<span class="py-com">' + esc(code.slice(i, j)) + '</span>';
+      i = j; continue;
+    }
+    if (ch === '"' || ch === "'") {
+      let j = i + 1;
+      while (j < n && code[j] !== ch) { if (code[j] === '\\') j++; j++; }
+      j = Math.min(j + 1, n);
+      out += flushOther(buf); buf = '';
+      out += '<span class="py-str">' + esc(code.slice(i, j)) + '</span>';
+      i = j; continue;
+    }
+    buf += ch; i++;
+  }
+  return out + flushOther(buf);
+}
+function highlightMarkdown(text) {
+  let inCode = false;
+  return text.split('\n').map(line => {
+    if (line.trim().startsWith('```')) { inCode = !inCode; return '<span class="md-code">' + esc(line) + '</span>'; }
+    if (inCode) return '<span class="md-code">' + esc(line) + '</span>';
+    if (/^#{1,6}\s/.test(line)) return '<span class="md-h">' + esc(line) + '</span>';
+    let s = esc(line)
+      .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+      .replace(/`([^`]+)`/g, '<span class="md-code">$1</span>')
+      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<span class="md-link">[$1]($2)</span>');
+    if (/^\s*[-*]\s/.test(line)) return '<span class="md-li">' + s + '</span>';
+    return s;
+  }).join('\n');
+}
+async function viewScriptFile(path, ext) {
+  const r = await api('/api/scripts/file?path=' + encodeURIComponent(path));
+  if (r.error) { toastMsg(r.error, 'err'); return; }
+  $('#popTitle').textContent = r.name;
+  const html = ext === '.py' ? highlightPython(r.content) : highlightMarkdown(r.content);
+  $('#popBody').innerHTML = `<div class="pane"><pre>${html}</pre></div>`;
+  $('#overlay').style.display = 'block';
+}
+$('#overlay').addEventListener('click', e => { if (e.target.id === 'overlay') closePop(); });
+
+/* ---------- 状态 & WebSocket ---------- */
+let lastCapState = null;
+function renderState(st) {
+  if (st.session) curCaptureSession = st.session;
+  // 结束抓包（含 Chrome 断开）：从抓包中/已暂停转为空闲时清空展示的记录
+  if (lastCapState && lastCapState !== 'idle' && st.state === 'idle') {
+    document.querySelector('#recTable tbody').innerHTML = '';
+  }
+  lastCapState = st.state;
+  const cs = $('#chromeState');
+  cs.textContent = st.chrome_alive ? 'Chrome 已启动' : 'Chrome 未启动';
+  cs.className = 'badge ' + (st.chrome_alive ? 'ok' : 'bad');
+  // Chrome 存活期间常驻提示：操作要在新启动的抓包 Chrome 中进行
+  $('#chromeHint').style.display = st.chrome_alive ? '' : 'none';
+  const stateText = {capturing: '进行中(' + st.session + ')', paused: '已暂停(' + st.session + ')', idle: '空闲'}[st.state] || st.state;
+  $('#status').textContent =
+    `Chrome:${st.chrome_alive ? '已启动' : '未启动'}  CDP:${st.cdp_connected ? '已连接' : '未连接'}  ` +
+    `抓包:${stateText}  Cookie:${st.cookie_total}条`;
+  $('#btnStart').disabled = st.state !== 'idle';
+  const pr = $('#btnPauseResume');
+  pr.disabled = st.state === 'idle';
+  pr.textContent = st.state === 'paused' ? '继续抓包' : '暂停抓包';
+  $('#btnEnd').disabled = st.state === 'idle';
+  $('#btnPurge').disabled = !(st.record_count > 0);
+  const mk = $('#btnMark');
+  mk.disabled = !((st.state === 'capturing' || st.state === 'paused') && !st.marked);
+  // 搜索内容：抓包中/已暂停（有当前会话数据）时可用
+  $('#btnSearchCap').disabled = st.state === 'idle';
+  mk.textContent = ((st.state === 'capturing' || st.state === 'paused') && st.marked) ? '已标记' : '人工标记本次抓包';
+  $('#capState').textContent = st.state === 'capturing' ? `抓包中：${st.session}，已记录 ${st.record_count} 条`
+    : st.state === 'paused' ? `已暂停：${st.session}（记录保留，可继续）`
+    : (st.message || '');
+}
+async function refreshStatus() { renderState(await api('/api/status')); }
+
+let ws;
+function connectWs() {
+  ws = new WebSocket(`ws://${location.host}/ws/capture`);
+  ws.onmessage = ev => {
+    const msg = JSON.parse(ev.data);
+    if (msg.type === 'state') renderState(msg);
+    else if (msg.type === 'record') addRecordRow(msg.record);
+    else if (msg.type === 'records') {
+      // F5 刷新后补发：恢复展示当前会话已有记录
+      document.querySelector('#recTable tbody').innerHTML = '';
+      msg.records.forEach(addRecordRow);
+    }
+    else if (msg.type === 'hosts') renderHosts(msg.hosts);
+    else if (msg.type === 'purged') {
+      const dead = new Set(msg.deleted_seqs);
+      document.querySelectorAll('#recTable tbody tr').forEach(tr => {
+        if (dead.has(tr.firstChild.textContent)) tr.remove();
+      });
+      $('#btnPurge').disabled = !(msg.record_count > 0);
+    }
+    else if (msg.type === 'mark_failed') toastMsg(msg.message, 'err', 8000);
+    else if (msg.type === 'cookie_push_empty') {
+      toastMsg(`接收到的Chrome Cookie数量为0（Chrome实例编号 ${msg.profile}），可能是因为在Chrome插件中未设置推送Cookie范围`, 'err', 10000);
+    }
+  };
+  ws.onclose = () => setTimeout(connectWs, 3000);
+}
+
+/* ---------- 抓包 ---------- */
+$('#btnChrome').onclick = async () => {
+  $('#btnChrome').disabled = true;
+  const r = await api('/api/chrome/start', {method: 'POST'});
+  toastMsg(r.message, r.ok ? 'ok' : 'err', 4000);
+  if (r.ok) {
+    toastMsg('请在新启动的用于抓包的Chrome浏览器窗口中操作，不要在日常Chrome浏览器中操作',
+             'ok', 8000);
+  }
+  $('#btnChrome').disabled = false;
+  refreshStatus();
+};
+$('#btnCheckChrome').onclick = refreshStatus;
+$('#btnStart').onclick = async () => {
+  await pushCaptureConf();
+  const r = await api('/api/capture/start', {method: 'POST'});
+  if (!r.ok) { toastMsg(r.message || r.error, 'err', 4000); return; }
+  // 非模态提示：抓包时机建议（重要操作可能被漏掉）
+  toastMsg('建议在打开对应页面前开始抓包，或从登录对应网站开始抓包，以避免重要操作被漏掉',
+           'ok', 8000);
+  document.querySelector('#recTable tbody').innerHTML = '';
+  refreshStatus();
+};
+$('#btnPauseResume').onclick = async () => {
+  const st = await api('/api/status');
+  const url = st.state === 'paused' ? '/api/capture/resume' : '/api/capture/pause';
+  const r = await api(url, {method: 'POST'});
+  if (!r.ok) toastMsg(r.message || r.error, 'err');
+  refreshStatus();
+};
+$('#btnEnd').onclick = async () => { await api('/api/capture/stop', {method: 'POST'}); refreshStatus(); };
+$('#btnPurge').onclick = async () => {
+  const b = $('#btnPurge');
+  if (!b.dataset.armed) { armConfirm(b, '再次点击确认删除', 4); return; }
+  disarmConfirm(b);
+  const r = await api('/api/capture/purge', {method: 'POST'});
+  // 显示删除及保留的访问记录数量（弹窗提示要求：非模态）
+  toastMsg(r.message || r.error, r.ok ? 'ok' : 'err', 5000);
+  refreshStatus();
+};
+$('#btnMark').onclick = async () => {
+  const r = await api('/api/capture/mark', {method: 'POST'});
+  toastMsg(r.message || r.error, r.ok ? 'ok' : 'err', 4000);
+  refreshStatus();
+};
+
+async function loadHosts() { const r = await api('/api/capture/hosts'); renderHosts(r.hosts); }
+function renderHosts(hosts) {
+  const sel = new Set([...document.querySelectorAll('#hostList input:checked')].map(i => i.value));
+  $('#hostCount').textContent = hosts.length ? `（共 ${hosts.length} 个）` : '';
+  $('#hostList').innerHTML = hosts.map(h =>
+    `<label class="ck"><input type="checkbox" value="${esc(h)}" ${sel.has(h) ? 'checked' : ''}> ${esc(h)}</label>`).join('') || '<div class="muted" style="padding:8px">（暂无访问记录，启动 Chrome 并访问网站后展示）</div>';
+  refreshHostListState();
+}
+function refreshHostListState() {
+  const all = $('#ckAllHosts').checked;
+  $('#hostList').classList.toggle('disabled', all);
+  document.querySelectorAll('#hostList input').forEach(i => i.disabled = all);
+  $('#hostsAll').disabled = $('#hostsNone').disabled = all;
+}
+function toggleUriEmpty() {
+  $('#uriEmpty').style.display = document.querySelectorAll('#uriRules .rule-row').length ? 'none' : '';
+}
+function makeRuleRow(type, value) {
+  const div = document.createElement('div');
+  div.className = 'rule-row';
+  div.dataset.type = type; div.dataset.value = value;
+  div.innerHTML = `<span class="badge">${{prefix:'以开头',equals:'等于',contains:'包含',suffix:'以结尾'}[type]}</span> <code>${esc(value)}</code> <button class="link" title="删除这条URI忽略规则">删除</button>`;
+  div.querySelector('button').onclick = () => { div.remove(); toggleUriEmpty(); pushCaptureConf(); };
+  return div;
+}
+function addRule() {
+  const type = $('#ruleType').value, value = $('#ruleValue').value.trim();
+  if (!value || !value.startsWith('/')) { toastMsg('URI 需要以 / 开头', 'err'); return; }
+  $('#uriRules').appendChild(makeRuleRow(type, value));
+  $('#ruleValue').value = '';
+  toggleUriEmpty();
+  pushCaptureConf();
+}
+['ckSuffix', 'ckCt', 'ckType'].forEach(id => $('#' + id).onchange = pushCaptureConf);
+$('#ckAllHosts').onchange = () => {
+  if (!$('#ckAllHosts').checked) {
+    // 取消"全部"时默认选中所有网址，方便再逐个排除
+    document.querySelectorAll('#hostList input').forEach(i => i.checked = true);
+  }
+  refreshHostListState();
+  pushCaptureConf();
+};
+$('#hostsAll').onclick = () => { document.querySelectorAll('#hostList input').forEach(i => i.checked = true); pushCaptureConf(); };
+$('#hostsNone').onclick = () => { document.querySelectorAll('#hostList input').forEach(i => i.checked = false); pushCaptureConf(); };
+$('#hostList').addEventListener('change', pushCaptureConf);
+
+async function loadCaptureConf() {
+  const c = await api('/api/capture/config');
+  $('#ckSuffix').checked = c.suffix_enabled; $('#ckCt').checked = c.content_type_enabled;
+  $('#ckType').checked = c.type_enabled !== false;
+  $('#ckAllHosts').checked = !c.domains || c.domains.length === 0;
+  // 恢复网址勾选状态（F5 刷新后保持与后端一致）
+  if (c.domains && c.domains.length) {
+    document.querySelectorAll('#hostList input').forEach(i => { i.checked = c.domains.includes(i.value); });
+  }
+  $('#uriRules').innerHTML = '';
+  (c.uri_rules || []).forEach(r => $('#uriRules').appendChild(makeRuleRow(r.type, r.value)));
+  toggleUriEmpty();
+  refreshHostListState();
+}
+async function pushCaptureConf() {
+  const domains = $('#ckAllHosts').checked ? [] :
+    [...document.querySelectorAll('#hostList input:checked')].map(i => i.value);
+  const uri_rules = [...document.querySelectorAll('#uriRules .rule-row')].map(d => ({type: d.dataset.type, value: d.dataset.value}));
+  await api('/api/capture/config', {method: 'PUT', body: JSON.stringify({
+    suffix_enabled: $('#ckSuffix').checked, content_type_enabled: $('#ckCt').checked,
+    type_enabled: $('#ckType').checked,
+    domains, uri_rules, ws_capture: false})});
+}
+
+function addRecordRow(r) {
+  const tr = document.createElement('tr');
+  tr.title = '单击打开查看';
+  tr.innerHTML = `<td>${r.seq}</td><td>${esc(r.time || '')}</td><td>${esc(r.method)}</td><td>${esc(r.type || '')}</td><td class="url" title="${esc(r.url)}">${esc(r.url)}</td>` +
+    `<td>${esc(r.content_type || '')}</td><td>${r.req_size}</td><td>${r.resp_size}</td><td>${r.duration_ms}</td>`;
+  tr.onclick = () => viewFile(curCaptureSession, r.seq + '.md');
+  const td = document.createElement('td');
+  const btn = document.createElement('button');
+  btn.className = 'link'; btn.textContent = '查看'; btn.title = '打开查看该记录的请求与返回内容';
+  btn.onclick = ev => { ev.stopPropagation(); viewFile(curCaptureSession, r.seq + '.md'); };
+  td.appendChild(btn); tr.appendChild(td);
+  document.querySelector('#recTable tbody').appendChild(tr);
+}
+async function viewFile(session, name) {
+  const r = await api(`/api/history/${session}/file?name=${encodeURIComponent(name)}`);
+  if (r.error) { toastMsg(r.error, 'err'); return; }
+  showRecord(name, r.content);
+}
+
+/* ---------- 搜索内容（抓包页/抓包记录页共用） ---------- */
+/* 搜索上下文：查看请求/返回内容关闭后，恢复搜索结果与输入现场 */
+let searchCtx = null;  // {session, keyword, scopes, resp, viewing}
+
+function buildSearchUI(session) {
+  $('#popTitle').textContent = '搜索内容（' + session + '）';
+  $('#popBody').innerHTML =
+    '<div class="row">' +
+    '<label style="display:inline-flex;align-items:center;gap:4px;font-size:13px"><input type="checkbox" id="scReqH" checked> 请求头</label>' +
+    '<label style="display:inline-flex;align-items:center;gap:4px;font-size:13px"><input type="checkbox" id="scReqB" checked> 请求body</label>' +
+    '<label style="display:inline-flex;align-items:center;gap:4px;font-size:13px"><input type="checkbox" id="scRespH" checked> 返回头</label>' +
+    '<label style="display:inline-flex;align-items:center;gap:4px;font-size:13px"><input type="checkbox" id="scRespB" checked> 返回body</label>' +
+    '<input type="text" id="scKeyword" placeholder="关键字" style="width:220px">' +
+    '<button class="btn" id="scGo" title="按关键字在选中的范围内搜索（支持中文，大小写不敏感）">搜索</button>' +
+    '<span class="muted" id="scStat"></span></div>' +
+    '<div class="pane" style="flex:1;overflow:auto;margin-top:8px">' +
+    '<table id="scTable"><thead><tr><th>序号</th><th>请求时间</th><th>方法</th><th>资源类型</th><th>URL</th><th>content-type</th><th>匹配部分</th><th></th></tr></thead><tbody></tbody></table>' +
+    '<div class="muted" id="scEmpty" style="padding:8px">输入关键字后点击搜索</div></div>';
+  $('#scGo').onclick = () => doSearch(session);
+  $('#scKeyword').onkeydown = e => { if (e.key === 'Enter') doSearch(session); };
+}
+
+function showSearch(session) {
+  searchCtx = null;  // 新开搜索：清空旧上下文
+  buildSearchUI(session);
+  $('#overlay').style.display = 'block';
+  $('#scKeyword').focus();
+}
+
+function renderSearchResults(session, r) {
+  $('#scStat').textContent = `搜索 ${r.searched} 条，匹配 ${r.match_count} 条`;
+  const tbody = document.querySelector('#scTable tbody');
+  tbody.innerHTML = '';
+  const empty = $('#scEmpty');
+  empty.style.display = r.matches.length ? 'none' : '';
+  empty.textContent = '无匹配记录';
+  r.matches.forEach(m => {
+    const tr = document.createElement('tr');
+    tr.title = '单击打开查看，关闭内容后返回搜索结果';
+    tr.innerHTML = `<td>${m.seq}</td><td>${esc(m.time || '')}</td><td>${esc(m.method || '')}</td>` +
+      `<td>${esc(m.type || '')}</td><td class="url" title="${esc(m.url || '')}">${esc(m.url || '')}</td>` +
+      `<td>${esc(m.content_type || '')}</td><td>${esc((m.parts || []).join('、'))}</td>`;
+    tr.onclick = () => viewFileFromSearch(session, m.seq + '.md');
+    const td = document.createElement('td');
+    const btn = document.createElement('button');
+    btn.className = 'link'; btn.textContent = '查看'; btn.title = '打开查看该记录的请求与返回内容（关闭后返回搜索结果）';
+    btn.onclick = ev => { ev.stopPropagation(); viewFileFromSearch(session, m.seq + '.md'); };
+    td.appendChild(btn); tr.appendChild(td);
+    tbody.appendChild(tr);
+  });
+}
+
+async function doSearch(session) {
+  const scopes = [];
+  if ($('#scReqH').checked) scopes.push('req_header');
+  if ($('#scReqB').checked) scopes.push('req_body');
+  if ($('#scRespH').checked) scopes.push('resp_header');
+  if ($('#scRespB').checked) scopes.push('resp_body');
+  const keyword = $('#scKeyword').value.trim();
+  if (!keyword) { toastMsg('请输入关键字', 'err'); return; }
+  if (!scopes.length) { toastMsg('请选择搜索范围', 'err'); return; }
+  $('#scStat').textContent = '搜索中…';
+  const r = await api(`/api/history/${session}/search`, {method: 'POST', body: JSON.stringify({keyword, scopes})});
+  if (r.error) { toastMsg(r.error, 'err'); $('#scStat').textContent = ''; return; }
+  searchCtx = {session, keyword, scopes, resp: r, viewing: false};
+  renderSearchResults(session, r);
+}
+
+/* 搜索结果查看：当前页面弹窗展示；关闭后恢复搜索结果（不清空关键字/结果） */
+async function viewFileFromSearch(session, name) {
+  if (searchCtx) searchCtx.viewing = true;
+  const r = await api(`/api/history/${session}/file?name=${encodeURIComponent(name)}`);
+  if (r.error) {
+    toastMsg(r.error, 'err');
+    if (searchCtx) searchCtx.viewing = false;
+    return;
+  }
+  showRecord(name, r.content);
+}
+
+/* 从内容查看返回搜索现场：恢复关键字、勾选与结果列表 */
+function restoreSearch() {
+  const ctx = searchCtx;
+  buildSearchUI(ctx.session);
+  $('#scKeyword').value = ctx.keyword;
+  const sc = new Set(ctx.scopes);
+  $('#scReqH').checked = sc.has('req_header');
+  $('#scReqB').checked = sc.has('req_body');
+  $('#scRespH').checked = sc.has('resp_header');
+  $('#scRespB').checked = sc.has('resp_body');
+  renderSearchResults(ctx.session, ctx.resp);
+}
+
+$('#btnSearchCap').onclick = () => { if (curCaptureSession) showSearch(curCaptureSession); };
+$('#btnSearchHist').onclick = () => { if (curSession) showSearch(curSession); };
+
+/* ---------- 删除不满足条件的记录（抓包记录页） ---------- */
+let pgPreviewing = false;  // 预览删除效果：true 时记录列表只展示会保留的数据
+function showPurgeHist(session) {
+  $('#popTitle').textContent = '删除不满足条件的记录（' + session + '）';
+  // 网址列表：该会话实际访问过的（从 index.md 记录提取主机名）
+  const hosts = [...new Set(histRecords.map(r => {
+    try { return new URL(r.url).hostname; } catch (e) { return ''; }
+  }).filter(Boolean))].sort();
+  $('#popBody').innerHTML =
+    '<div class="muted" style="font-size:12px">配置过滤条件（与抓包页面口径一致）；删除后序号保持不变，不可恢复</div>' +
+    '<div class="split" style="margin-top:8px;flex:1;min-height:0">' +
+    '<div style="width:280px;flex:none;overflow:auto">' +
+    '<label class="ck"><input type="checkbox" id="pgType" checked> 根据Chrome请求类型过滤（静态资源）</label>' +
+    '<label class="ck"><input type="checkbox" id="pgSuffix" checked> 根据URL后缀过滤静态资源</label>' +
+    '<label class="ck"><input type="checkbox" id="pgCt" checked> 根据返回content-type过滤静态资源</label>' +
+    '<b style="font-size:13px">忽略的URI（以 / 开头）</b>' +
+    '<div id="pgUriRulesBox"><div id="pgUriRules"></div><div class="muted" id="pgUriEmpty">（无规则）</div></div>' +
+    '<div class="rule-row"><select id="pgRuleType">' +
+    '<option value="prefix">以开头</option><option value="equals">等于</option>' +
+    '<option value="contains">包含</option><option value="suffix">以结尾</option></select>' +
+    '<input type="text" id="pgRuleValue" placeholder="/xxx" size="12">' +
+    '<button class="btn" id="pgRuleAdd" title="添加一条URI忽略规则（以 / 开头），命中的记录将被删除">添加</button></div>' +
+    '</div>' +
+    '<div style="flex:1;display:flex;flex-direction:column;min-width:0">' +
+    '<div class="row" style="align-items:center;gap:10px">' +
+    '<label class="ck" style="margin:0"><input type="checkbox" id="pgAllHosts" checked> 全部（不筛选）</label>' +
+    '<span><button class="link" id="pgHostsAll" title="勾选列表中的全部网址">全选</button> <button class="link" id="pgHostsNone" title="取消勾选列表中的全部网址">取消全选</button></span>' +
+    '<span class="muted">该会话实际访问过的网址</span>' +
+    '</div>' +
+    '<div class="list" id="pgHostList" style="max-height:120px">' +
+    (hosts.map(h => `<label class="ck"><input type="checkbox" value="${esc(h)}"> ${esc(h)}</label>`).join('') ||
+      '<div class="muted" style="padding:8px">（该会话暂无访问记录）</div>') +
+    '</div>' +
+    '<div class="row" style="margin-top:8px;align-items:center;gap:10px">' +
+    '<b style="font-size:13px">访问记录</b>' +
+    '<button class="link" id="pgPreview" title="切换预览：开启后记录列表只展示按当前条件会保留的数据">预览删除效果（只展示会保留的数据）</button>' +
+    '<span class="muted" id="pgStat"></span>' +
+    '</div>' +
+    '<div class="pane" style="flex:1;overflow:auto">' +
+    '<table id="pgTable"><thead><tr><th>序号</th><th>请求时间</th><th>方法</th><th>资源类型</th><th>URL</th><th>content-type</th><th>请求body字节数</th><th>返回body字节数</th><th>耗时ms</th><th></th></tr></thead><tbody></tbody></table>' +
+    '</div>' +
+    '</div></div>' +
+    '<div class="row" style="padding:4px 0"><button class="btn warn" id="pgGo" title="按当前过滤条件删除不满足的记录（二次点击确认，删除后不可恢复）">删除不满足条件的记录</button>' +
+    '<span class="muted">预览状态下执行删除会删除被过滤的记录</span></div>';
+  $('#overlay').style.display = 'block';
+  const refreshHosts = () => {
+    const all = $('#pgAllHosts').checked;
+    $('#pgHostList').classList.toggle('disabled', all);
+    document.querySelectorAll('#pgHostList input').forEach(i => i.disabled = all);
+  };
+  $('#pgAllHosts').onchange = () => {
+    if (!$('#pgAllHosts').checked) {
+      document.querySelectorAll('#pgHostList input').forEach(i => i.checked = true);
+    }
+    refreshHosts();
+  };
+  $('#pgHostsAll').onclick = () => document.querySelectorAll('#pgHostList input').forEach(i => i.checked = true);
+  $('#pgHostsNone').onclick = () => document.querySelectorAll('#pgHostList input').forEach(i => i.checked = false);
+  refreshHosts();
+  const toggleUriEmpty = () => {
+    $('#pgUriEmpty').style.display =
+      document.querySelectorAll('#pgUriRules .rule-row').length ? 'none' : '';
+  };
+  $('#pgRuleAdd').onclick = () => {
+    const type = $('#pgRuleType').value, value = $('#pgRuleValue').value.trim();
+    if (!value || !value.startsWith('/')) { toastMsg('URI 需要以 / 开头', 'err'); return; }
+    const div = document.createElement('div');
+    div.className = 'rule-row';
+    div.dataset.type = type; div.dataset.value = value;
+    div.innerHTML = `<span class="badge">${{prefix: '以开头', equals: '等于', contains: '包含', suffix: '以结尾'}[type]}</span> <code>${esc(value)}</code> <button class="link" title="删除这条URI忽略规则">删除</button>`;
+    div.querySelector('button').onclick = () => { div.remove(); toggleUriEmpty(); renderPgRows(); };
+    $('#pgUriRules').appendChild(div);
+    $('#pgRuleValue').value = '';
+    toggleUriEmpty();
+    renderPgRows();
+  };
+  toggleUriEmpty();
+
+  // ---------- 访问记录列表（与统一展示要求一致；预览时只展示会保留的数据） ----------
+  const pgConf = () => ({
+    type_enabled: $('#pgType').checked, suffix_enabled: $('#pgSuffix').checked,
+    content_type_enabled: $('#pgCt').checked,
+    domains: $('#pgAllHosts').checked ? [] :
+      [...document.querySelectorAll('#pgHostList input:checked')].map(i => i.value),
+    uri_rules: [...document.querySelectorAll('#pgUriRules .rule-row')]
+      .map(d => ({type: d.dataset.type, value: d.dataset.value}))
+  });
+  const pgViolates = rec => {
+    // 与后端 evaluate_violation 同口径的前端评估（预览用）
+    const c = pgConf();
+    if (c.type_enabled && rec.type && ['Stylesheet', 'Script', 'Image', 'Font', 'Media', 'TextTrack', 'Manifest', 'Prefetch'].includes(rec.type)) return true;
+    if (c.suffix_enabled) {
+      const m = (rec.url || '').toLowerCase().match(/(\.[a-z0-9]+)(\?|$)/);
+      if (m && ['.js', '.css', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.ico', '.woff', '.woff2', '.ttf', '.eot', '.otf', '.map', '.webp', '.avif', '.mp4', '.webm', '.mp3', '.wav'].includes(m[1])) return true;
+    }
+    if (c.content_type_enabled && rec.content_type) {
+      const ct = rec.content_type.toLowerCase();
+      if (['text/css', 'image/', 'font/', 'audio/', 'video/', 'application/javascript', 'application/x-javascript', 'text/javascript', 'application/font'].some(p => ct.includes(p))) return true;
+    }
+    if (c.domains.length) {
+      try { if (!c.domains.includes(new URL(rec.url).hostname)) return true; } catch (e) { return true; }
+    }
+    if (c.uri_rules.length) {
+      let uri = '';
+      try { const u = new URL(rec.url); uri = u.pathname + (u.search || ''); } catch (e) {}
+      for (const r of c.uri_rules) {
+        if (!r.value) continue;
+        if (r.type === 'prefix' && uri.startsWith(r.value)) return true;
+        if (r.type === 'equals' && uri === r.value) return true;
+        if (r.type === 'contains' && r.value && uri.includes(r.value)) return true;
+        if (r.type === 'suffix' && uri.endsWith(r.value)) return true;
+      }
+    }
+    return false;
+  };
+  const renderPgRows = () => {
+    const tbody = document.querySelector('#pgTable tbody');
+    tbody.innerHTML = '';
+    const rows = pgPreviewing ? histRecords.filter(r => !pgViolates(r)) : histRecords;
+    rows.forEach(rec => {
+      const tr = document.createElement('tr');
+      tr.title = '单击打开查看';
+      tr.innerHTML = `<td>${rec.seq}</td><td>${esc(rec.time || '')}</td><td>${esc(rec.method)}</td>` +
+        `<td>${esc(rec.type || '')}</td><td class="url" title="${esc(rec.url)}">${esc(rec.url)}</td>` +
+        `<td>${esc(rec.content_type || '')}</td><td>${rec.req_size}</td><td>${rec.resp_size}</td><td>${rec.duration_ms}</td>`;
+      tr.onclick = () => viewFile(session, rec.seq + '.md');
+      const td = document.createElement('td');
+      const btn = document.createElement('button');
+      btn.className = 'link'; btn.textContent = '查看'; btn.title = '打开查看该记录的请求与返回内容';
+      btn.onclick = ev => { ev.stopPropagation(); viewFile(session, rec.seq + '.md'); };
+      td.appendChild(btn); tr.appendChild(td);
+      tbody.appendChild(tr);
+    });
+    const total = histRecords.length, keep = rows.length;
+    $('#pgStat').textContent = pgPreviewing
+      ? `预览：共 ${total} 条，保留 ${keep} 条，将删除 ${total - keep} 条`
+      : `共 ${total} 条`;
+  };
+  // 过滤条件变化即时重算预览
+  ['pgType', 'pgSuffix', 'pgCt', 'pgAllHosts'].forEach(id => $('#' + id).onchange = () => { refreshHosts(); renderPgRows(); });
+  $('#pgHostList').addEventListener('change', renderPgRows);
+  $('#pgPreview').onclick = () => {
+    pgPreviewing = !pgPreviewing;
+    $('#pgPreview').textContent = pgPreviewing ? '取消预览（展示全部数据）' : '预览删除效果（只展示会保留的数据）';
+    renderPgRows();
+  };
+  pgPreviewing = false;
+  renderPgRows();
+
+  $('#pgGo').onclick = async () => {
+    const b = $('#pgGo');
+    if (!b.dataset.armed) { armConfirm(b, '再次点击确认删除', 4); return; }
+    disarmConfirm(b);
+    $('#pgStat').textContent = '删除中…';
+    const c = pgConf();
+    const r = await api(`/api/history/${session}/purge`, {method: 'POST', body: JSON.stringify(c)});
+    if (r.error) { toastMsg(r.error, 'err'); $('#pgStat').textContent = ''; return; }
+    toastMsg(r.message, r.ok ? 'ok' : 'err', 5000);
+    closePop();
+    loadHistory(session); // 重选该目录：记录列表按统一展示要求刷新，目录记录数同步
+  };
+}
+$('#btnPurgeHist').onclick = () => { if (curSession) showPurgeHist(curSession); };
+
+/* ---------- 抓包记录 ---------- */
+const MARK_SUFFIX = '_人工标记';
+async function loadHistory(reselect) {
+  const r = await api('/api/history');
+  const info = {};
+  (r.items || []).forEach(i => { info[i.name] = i; });
+  $('#sessList').innerHTML = r.sessions.map(s => {
+    const it = info[s] || {record_count: 0, path: ''};
+    const marked = s.endsWith(MARK_SUFFIX);
+    return `<div class="item${marked ? ' marked' : ''}" data-s="${esc(s)}" data-p="${esc(it.path || '')}">` +
+      `${marked ? '★ ' : ''}${esc(s)}${r.active === s ? ' <span class="badge ok">抓包中</span>' : ''}` +
+      ` <span style="float:right;white-space:nowrap"><span class="muted">${it.record_count}条</span>` +
+      ` <button class="link hcopy" title="复制该子目录的完整路径">复制路径</button></span></div>`;
+  }).join('') || '<div class="muted" style="padding:8px">无</div>';
+  // 每个子目录支持复制完整路径（复制按钮不触发选中）
+  document.querySelectorAll('#sessList .hcopy').forEach(btn => {
+    btn.onclick = ev => {
+      ev.stopPropagation();
+      copyText(btn.closest('.item').dataset.p);
+    };
+  });
+  document.querySelectorAll('#sessList .item').forEach(el => el.onclick = () => {
+    document.querySelectorAll('#sessList .item').forEach(x => x.classList.remove('sel'));
+    el.classList.add('sel');
+    curSession = el.dataset.s;
+    loadFiles(curSession);
+  });
+  if (reselect) {
+    const el = [...document.querySelectorAll('#sessList .item')].find(x => x.dataset.s === reselect);
+    if (el) el.click();
+  }
+}
+async function loadFiles(s) {
+  $('#sessTitle').textContent = s;
+  const r = await api(`/api/history/${s}/records`);
+  histRecords = r.records || [];
+  const tbody = document.querySelector('#histRecTable tbody');
+  tbody.innerHTML = '';
+  (r.records || []).forEach(rec => {
+    const tr = document.createElement('tr');
+    tr.title = '单击打开查看';
+    tr.innerHTML = `<td>${rec.seq}</td><td>${esc(rec.time || '')}</td><td>${esc(rec.method)}</td>` +
+      `<td>${esc(rec.type || '')}</td><td class="url" title="${esc(rec.url)}">${esc(rec.url)}</td>` +
+      `<td>${esc(rec.content_type || '')}</td><td>${rec.req_size}</td><td>${rec.resp_size}</td><td>${rec.duration_ms}</td>`;
+    tr.onclick = () => viewFile(s, rec.seq + '.md');
+    const td = document.createElement('td');
+    const btn = document.createElement('button');
+    btn.className = 'link'; btn.textContent = '查看'; btn.title = '打开查看该记录的请求与返回内容';
+    btn.onclick = ev => { ev.stopPropagation(); viewFile(s, rec.seq + '.md'); };
+    td.appendChild(btn); tr.appendChild(td);
+    tbody.appendChild(tr);
+  });
+  $('#histEmpty').style.display = (r.records && r.records.length) ? 'none' : '';
+  $('#btnPrompt').disabled = false;
+  $('#btnSearchHist').disabled = false;
+  $('#btnViewIndex').disabled = false;
+  $('#renameRow').style.display = 'none';
+  const st = await api('/api/status');
+  const isActive = st.state === 'capturing' && st.session === s;
+  $('#btnDelSess').disabled = isActive;
+  $('#btnRename').disabled = isActive;
+  $('#btnPurgeHist').disabled = isActive;
+  const mb = $('#btnMarkSess');
+  mb.disabled = isActive;
+  const markedNow = s.endsWith(MARK_SUFFIX);
+  mb.textContent = markedNow ? '取消标记' : '人工标记';
+  mb.title = markedNow ? '取消该目录的人工标记' : '需要提供给AI使用的抓包记录可以点击人工标记';
+}
+$('#btnViewIndex').onclick = () => viewFile(curSession, 'index.md');
+
+/* ---------- 重命名 ---------- */
+$('#btnRename').onclick = () => {
+  // 编辑框显示当前完整目录名以便操作
+  $('#renameInput').value = curSession;
+  $('#renameRow').style.display = '';
+  $('#renameInput').focus();
+  $('#renameInput').select();
+};
+$('#btnRenameCancel').onclick = () => { $('#renameRow').style.display = 'none'; };
+$('#btnRenameOk').onclick = async () => {
+  const name = $('#renameInput').value.trim();
+  const r = await api(`/api/history/${curSession}/rename`, {method: 'PUT', body: JSON.stringify({name})});
+  if (r.error) { toastMsg(r.error, 'err'); return; }
+  $('#renameRow').style.display = 'none';
+  toastMsg(r.changed ? `已重命名为 ${r.name}` : '名称未变化', 'ok');
+  curSession = r.name;
+  loadHistory(r.name);
+};
+$('#btnMarkSess').onclick = async () => {
+  const marked = curSession.endsWith(MARK_SUFFIX);
+  const r = await api(`/api/history/${curSession}/mark`, {method: 'PUT', body: JSON.stringify({marked: !marked})});
+  if (r.error) { toastMsg(r.error, 'err'); return; }
+  toastMsg(marked ? '已取消标记' : '已标记', 'ok');
+  curSession = r.name;
+  loadHistory(r.name);
+};
+
+/* ---------- 批量删除 ---------- */
+$('#btnBatchDel').onclick = async () => {
+  const r = await api('/api/history');
+  $('#popTitle').textContent = '批量删除抓包目录';
+  const rows = r.sessions.map(s => {
+    const marked = s.endsWith(MARK_SUFFIX);
+    const active = r.active === s;
+    return `<label class="ck" style="display:flex;gap:8px;align-items:center;${active ? 'opacity:.5' : ''}">` +
+      `<input type="checkbox" value="${esc(s)}" ${active ? 'disabled' : ''} data-marked="${marked}">` +
+      `<span>${marked ? '★ ' : ''}${esc(s)}${active ? '（抓包中，不可删除）' : ''}</span></label>`;
+  }).join('');
+  $('#popBody').innerHTML =
+    '<div class="row">' +
+    '<button class="link" id="bdAll" title="勾选列表中的全部子目录">全选</button>' +
+    '<button class="link" id="bdNone" title="取消勾选列表中的全部子目录">取消全选</button>' +
+    '<button class="link" id="bdUnmarked" title="只勾选未人工标记的子目录">选择未人工标记</button>' +
+    '<span class="muted" id="bdCount"></span></div>' +
+    `<div class="pane" style="flex:1;overflow:auto">${rows || '<span class="muted">无抓包目录</span>'}</div>` +
+    '<div class="row"><button class="btn warn" id="bdGo" title="删除所有勾选的子目录（删除后不可恢复，抓包中的目录自动跳过）">删除选中</button><span class="muted">删除后不可恢复，抓包中的目录自动跳过</span></div>';
+  $('#overlay').style.display = 'block';
+  const boxes = () => [...document.querySelectorAll('#popBody input[type=checkbox]')];
+  const update = () => { $('#bdCount').textContent = '已选 ' + boxes().filter(b => b.checked).length + ' 个'; };
+  boxes().forEach(b => b.onchange = update);
+  $('#bdAll').onclick = () => { boxes().forEach(b => { if (!b.disabled) b.checked = true; }); update(); };
+  $('#bdNone').onclick = () => { boxes().forEach(b => b.checked = false); update(); };
+  $('#bdUnmarked').onclick = () => { boxes().forEach(b => { if (!b.disabled) b.checked = b.dataset.marked !== 'true'; }); update(); };
+  update();
+  $('#bdGo').onclick = async () => {
+    const b = $('#bdGo');
+    if (!b.dataset.armed) { armConfirm(b, '再次点击确认删除', 4); return; }
+    disarmConfirm(b);
+    const sel = boxes().filter(x => x.checked && !x.disabled).map(x => x.value);
+    if (!sel.length) { toastMsg('未选择任何目录', 'err'); return; }
+    closePop();
+    const res = await api('/api/history/batch_delete', {method: 'POST', body: JSON.stringify({sessions: sel})});
+    let msg = `已删除 ${res.deleted_count} 个目录`;
+    if (res.failed_count) msg += `，${res.failed_count} 个失败/跳过`;
+    toastMsg(msg, res.failed_count ? 'err' : 'ok', 5000);
+    curSession = null; document.querySelector('#histRecTable tbody').innerHTML = ''; $('#btnPrompt').disabled = true; $('#btnSearchHist').disabled = true; $('#btnPurgeHist').disabled = true; $('#btnDelSess').disabled = true; $('#btnMarkSess').disabled = true; $('#btnViewIndex').disabled = true; $('#btnRename').disabled = true;
+    loadHistory();
+  };
+};
+$('#btnPrompt').onclick = async () => {
+  const r = await api(`/api/history/${curSession}/prompt`, {method: 'POST'});
+  if (r.error) { toastMsg(r.error, 'err', 8000); return; }
+  showText('生成固化脚本提示词', r.prompt, true);
+};
+$('#btnDelSess').onclick = async () => {
+  const b = $('#btnDelSess');
+  if (!b.dataset.armed) { armConfirm(b, '再次点击确认删除'); return; }
+  disarmConfirm(b);
+  const r = await api(`/api/history/${curSession}`, {method: 'DELETE'});
+  if (r.error) { toastMsg(r.error, 'err'); return; }
+  toastMsg(`已删除 ${curSession}`, 'ok');
+  curSession = null; document.querySelector('#histRecTable tbody').innerHTML = ''; $('#btnPrompt').disabled = true; $('#btnSearchHist').disabled = true; $('#btnPurgeHist').disabled = true; $('#btnDelSess').disabled = true; $('#btnMarkSess').disabled = true; $('#btnViewIndex').disabled = true; $('#btnRename').disabled = true;
+  loadHistory();
+};
+
+/* ---------- 快速执行 ---------- */
+async function loadScripts() {
+  loadScriptsDirConf();
+  const r = await api('/api/scripts');
+  curScriptDir = null;
+  $('#btnDelScriptDir').disabled = true;
+  $('#scriptDirs').innerHTML = r.scripts.map(s =>
+    `<div class="item" data-d="${esc(s.dir)}">` +
+    `<span class="badge cat-${s.category === 'user' ? 'user' : 'example'}" title="${s.category === 'user' ? '用户自定义的脚本子目录' : '示例脚本子目录'}">${s.category === 'user' ? '自定义' : '示例'}</span> ` +
+    `${esc(s.dir.split(/[\\/]/).pop())} <span class="muted">(${s.py_files.length}个py)</span>` +
+    ` <button class="link fcopy" title="复制该子目录的完整路径">复制路径</button></div>`).join('') ||
+    '<div class="muted" style="padding:8px">暂无脚本目录</div>';
+  // 每个子目录支持复制完整路径（复制按钮不触发选中）
+  document.querySelectorAll('#scriptDirs .fcopy').forEach(btn => {
+    btn.onclick = ev => {
+      ev.stopPropagation();
+      copyText(btn.closest('.item').dataset.d);
+    };
+  });
+  document.querySelectorAll('#scriptDirs .item').forEach((el, i) => el.onclick = () => {
+    document.querySelectorAll('#scriptDirs .item').forEach(x => x.classList.remove('sel'));
+    el.classList.add('sel');
+    curScriptDir = r.scripts[i].dir;
+    $('#btnDelScriptDir').disabled = false;
+    const pys = r.scripts[i].py_files;
+    const files = pys.map(p => ({path: p.path, mtime: p.mtime, kind: 'py'}))
+      .concat((r.scripts[i].doc_files || []).map(p => ({path: p.path, mtime: p.mtime, kind: 'md'})));
+    $('#pyList').innerHTML = files.map(f =>
+      `<div class="item" data-p="${esc(f.path)}" data-kind="${f.kind}" ` +
+      `title="${f.kind === 'py' ? '单击选中用于执行，点"查看"打开内容' : '单击打开查看'}">` +
+      `<span class="badge ${f.kind}">${f.kind}</span> ${esc(f.path.split(/[\\/]/).pop())}` +
+      ` <span class="muted" style="float:right">${esc(f.mtime || '')}</span>` +
+      (f.kind === 'py' ? ' <button class="link fview" title="查看该py脚本内容（语法高亮）">查看</button>' : '') + `</div>`).join('');
+    curScript = null; $('#btnRun').disabled = true;
+    if (pys.length === 1) {
+      // 只有一个 .py：直接可执行，无需手选
+      const item = $('#pyList .item[data-kind=py]');
+      item.classList.add('sel');
+      curScript = item.dataset.p;
+      $('#btnRun').disabled = false;
+      $('#pyHint').textContent = '';
+    } else if (pys.length > 1) {
+      // 多个 .py：提示先选中
+      $('#pyHint').textContent = `该目录有 ${pys.length} 个 .py 文件，请选中要执行的一个`;
+    } else {
+      $('#pyHint').textContent = '该目录下没有 .py 文件';
+    }
+    $('#pyList').querySelectorAll('.item').forEach(pe => {
+      const kind = pe.dataset.kind;
+      if (kind === 'md') {
+        pe.style.cursor = 'pointer';
+        pe.onclick = () => viewScriptFile(pe.dataset.p, 'md');
+      } else {
+        pe.onclick = () => {
+          $('#pyList').querySelectorAll('.item').forEach(x => x.classList.remove('sel'));
+          pe.classList.add('sel'); curScript = pe.dataset.p; $('#btnRun').disabled = false;
+          if (pys.length > 1) $('#pyHint').textContent = '';
+        };
+        pe.querySelector('.fview').onclick = ev => { ev.stopPropagation(); viewScriptFile(pe.dataset.p, 'py'); };
+      }
+    });
+  });
+}
+/* 配置固化脚本保存目录（全局配置 key=python_scripts_dir_path） */
+async function loadScriptsDirConf() {
+  const r = await api('/api/global_conf?key=python_scripts_dir_path');
+  $('#cfgScriptsDir').value = r.value || '';
+}
+$('#btnSaveScriptsDir').onclick = async () => {
+  const v = $('#cfgScriptsDir').value.trim();
+  const r = await api('/api/global_conf', {method: 'PUT', body: JSON.stringify({key: 'python_scripts_dir_path', value: v})});
+  if (r.error) { toast($('#scriptsDirMsg'), r.error, true); return; }
+  toast($('#scriptsDirMsg'), '已保存到全局配置文件', false);
+  loadScripts();  // 用户自定义目录下的子目录可能变化
+};
+/* 删除子目录：二次确认（非模态），删除后清空右侧并刷新列表 */
+$('#btnDelScriptDir').onclick = async () => {
+  const b = $('#btnDelScriptDir');
+  if (!curScriptDir) return;
+  if (!b.dataset.armed) { armConfirm(b, '再次点击确认删除', 4); return; }
+  disarmConfirm(b);
+  const name = curScriptDir.split(/[\\/]/).pop();
+  const r = await api('/api/scripts/dir?path=' + encodeURIComponent(curScriptDir), {method: 'DELETE'});
+  if (r.error) { toastMsg(r.error, 'err'); return; }
+  toastMsg(`已删除脚本子目录 ${name}`, 'ok');
+  curScriptDir = null; curScript = null;
+  $('#btnDelScriptDir').disabled = true;
+  $('#btnRun').disabled = true;
+  $('#pyList').innerHTML = ''; $('#pyHint').textContent = '';
+  $('#execOut').textContent = ''; $('#execState').textContent = '';
+  loadScripts();
+};
+$('#btnRun').onclick = async () => {
+  const r = await api('/api/scripts/run', {method: 'POST', body: JSON.stringify({path: curScript})});
+  if (r.error) { toastMsg(r.error, 'err'); return; }
+  execId = r.exec_id;
+  $('#execOut').textContent = ''; $('#btnKill').style.display = 'none';
+  $('#execState').textContent = '执行中…';
+  execTimer = setInterval(pollExec, 1000); pollExec();
+};
+async function pollExec() {
+  const r = await api('/api/exec/' + execId);
+  $('#execOut').textContent = (r.stdout || '') + (r.stderr ? '\n--- stderr ---\n' + r.stderr : '');
+  $('#execOut').scrollTop = $('#execOut').scrollHeight;
+  if (r.timed_out && r.running) { $('#execState').textContent = '执行超时（进程仍在运行）'; $('#btnKill').style.display = ''; }
+  if (!r.running) {
+    clearInterval(execTimer); $('#btnKill').style.display = 'none';
+    $('#execState').textContent = `结束：exit=${r.exit_code}${r.timed_out ? '（超时）' : ''}${r.killed ? '（已终止）' : ''} 耗时${r.elapsed_ms}ms`;
+  }
+}
+$('#btnKill').onclick = async () => { await api(`/api/exec/${execId}/kill`, {method: 'POST'}); $('#btnKill').style.display = 'none'; };
+
+/* ---------- 定时执行脚本 ---------- */
+const WD_NAMES = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+const RESULT_BADGES = {success: '<span class="badge ok">成功</span>',
+  failed: '<span class="badge bad">失败</span>',
+  timeout: '<span class="badge bad">超时</span>',
+  error: '<span class="badge bad">错误</span>'};
+
+function shortScript(p) {
+  const parts = (p || '').split(/[\\/]/);
+  return parts.length >= 2 ? parts.slice(-2).join('/') : (p || '');
+}
+async function loadSchedules() {
+  const r = await api('/api/schedules');
+  const list = r.schedules || [];
+  const tbody = document.querySelector('#schedTable tbody');
+  tbody.innerHTML = '';
+  $('#schedEmpty').style.display = list.length ? 'none' : '';
+  list.forEach(t => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td title="${esc(t.script_path)}">${esc(shortScript(t.script_path))}</td>` +
+      `<td>${esc(t.schedule_desc || '')}</td>` +
+      `<td>${t.enabled ? '<span class="badge ok">启动</span>' : '<span class="badge">已暂停</span>'}` +
+      `${t.running ? ' <span class="badge bad">执行中</span>' : ''}</td>` +
+      `<td>${t.last_run ? esc(t.last_run) + ' ' + (RESULT_BADGES[t.last_result] || '') : '-'}</td>` +
+      `<td>${t.next_run ? esc(t.next_run) : '-'}</td><td></td>`;
+    const td = tr.lastChild;
+    const mk = (text, title) => {
+      const b = document.createElement('button');
+      b.className = 'link'; b.textContent = text; b.title = title;
+      return b;
+    };
+    const pr = mk(t.enabled ? '暂停' : '恢复',
+                  t.enabled ? '暂停该定时任务（暂停期间不再触发执行）'
+                            : '恢复该被暂停的定时任务');
+    pr.onclick = async () => {
+      await api(`/api/schedules/${t.id}/${t.enabled ? 'pause' : 'resume'}`, {method: 'POST'});
+      loadSchedules();
+    };
+    const ed = mk('编辑', '编辑该定时任务的脚本与定时方式（暂停状态保持不变）');
+    ed.onclick = () => showSchedForm(t);
+    const lg = mk('查看执行日志', '弹出新页面查看该任务的执行日志记录（支持按日期筛选）');
+    lg.onclick = () => showSchedLogs(t);
+    const del = mk('删除', '删除该定时任务（不删除对应的Python脚本）');
+    del.onclick = async () => {
+      if (!del.dataset.armed) { armConfirm(del, '再次点击确认删除', 4); return; }
+      disarmConfirm(del);
+      const res = await api(`/api/schedules/${t.id}`, {method: 'DELETE'});
+      if (res.error) { toastMsg(res.error, 'err'); return; }
+      toastMsg('已删除定时任务（Python脚本未删除）', 'ok');
+      loadSchedules();
+    };
+    td.append(pr, ed, lg, del);
+    tbody.appendChild(tr);
+  });
+}
+$('#btnAddSched').onclick = () => showSchedForm(null);
+
+/* 新增/编辑任务表单（task=null 为新增） */
+async function showSchedForm(task) {
+  $('#popTitle').textContent = task ? '编辑定时任务' : '新增定时任务';
+  const r = await api('/api/scripts');
+  const scripts = r.scripts || [];
+  const withPy = scripts.filter(s => s.py_files.length);
+  if (!withPy.length) { toastMsg('暂无可选的脚本（需在示例目录或用户自定义目录下有含 .py 的子目录）', 'err', 6000); return; }
+  $('#popBody').innerHTML =
+    '<div class="row" style="flex-wrap:wrap">' +
+    '<label style="display:inline-flex;align-items:center;gap:6px;font-size:13px">脚本子目录 <select id="sfDir" title="选择要定时执行的固化脚本所在子目录"></select></label>' +
+    '<label style="display:inline-flex;align-items:center;gap:6px;font-size:13px">Python文件 <select id="sfPy" title="选择要定时执行的 .py 脚本"></select></label></div>' +
+    '<div class="row" style="margin-top:10px">' +
+    '<label class="ck" style="margin:0"><input type="radio" name="sfType" value="at" checked> 在指定时间执行</label>' +
+    '<label class="ck" style="margin:0"><input type="radio" name="sfType" value="interval"> 每隔一段时间执行</label></div>' +
+    '<div id="sfAtBox" style="margin-top:8px;border:1px solid #eee;border-radius:4px;padding:8px">' +
+    '<div class="row">' +
+    '<label class="ck" style="margin:0"><input type="radio" name="sfMode" value="daily" checked> 每天</label>' +
+    '<label class="ck" style="margin:0"><input type="radio" name="sfMode" value="weekly"> 每个星期x</label>' +
+    '<label class="ck" style="margin:0"><input type="radio" name="sfMode" value="monthly"> 每个月第x天</label></div>' +
+    '<div class="wd-box" id="sfWeeklyBox" style="display:none;margin-top:6px">' +
+    WD_NAMES.map((n, i) => `<label class="ck"><input type="checkbox" class="sfWd" value="${i}" title="勾选每周${n}执行"> ${n}</label>`).join('') +
+    '</div>' +
+    '<div id="sfMonthlyBox" style="display:none;margin-top:6px;font-size:13px">每月第 ' +
+    '<input type="text" id="sfMonthDays" style="width:120px" placeholder="如 1,15" title="每月第几日执行，支持多个，逗号分隔（1~31）"> 日（多个用英文逗号分隔，1~31）</div>' +
+    '<div style="margin-top:8px"><b style="font-size:13px">执行时间（时:分:秒，支持指定多个）</b></div>' +
+    '<div id="sfTimes"></div>' +
+    '<button class="link" id="sfAddTime" title="添加一个执行时间（时:分:秒）">添加时间</button></div>' +
+    '<div id="sfIntervalBox" style="display:none;margin-top:8px;border:1px solid #eee;border-radius:4px;padding:8px;font-size:13px">' +
+    '从 <input type="datetime-local" id="sfStart" step="1" title="开始执行的具体时间" style="padding:3px 5px;border:1px solid #ccc;border-radius:4px"> 开始，每隔 ' +
+    '<input type="number" id="sfEvery" min="1" value="1" style="width:70px" title="间隔数量"> ' +
+    '<select id="sfUnit" title="间隔时间单位"><option value="1">秒</option><option value="60" selected>分钟</option><option value="3600">小时</option><option value="86400">天</option></select> 执行一次' +
+    '<div style="margin-top:8px"><label class="ck" style="margin:0"><input type="checkbox" id="sfAllTime" checked> 允许执行的时间段：全部时间段</label></div>' +
+    '<div id="sfWindowsBox" style="display:none;margin-top:4px">' +
+    '<div id="sfWindows"></div>' +
+    '<button class="link" id="sfAddWindow" title="添加一个允许执行的时间段（起止 时:分:秒）">添加时间段</button>' +
+    '<span class="muted">起止可跨零点（如 22:00:00 ~ 06:00:00）；调度点落在任一时间段内才执行</span></div></div>' +
+    '<div class="row" style="padding:6px 0"><button class="btn" id="sfSave" title="保存该定时任务（新增后默认启动）">保存</button>' +
+    '<button class="btn" id="sfCancel" title="取消并关闭表单">取消</button>' +
+    '<span class="muted">新增后默认启动；编辑保存后按新的定时方式计算下次执行</span></div>';
+  $('#overlay').style.display = 'block';
+
+  // 子目录下拉：示例目录在前、用户自定义在后（optgroup 区分类别）
+  const groups = [['示例目录', 'example'], ['用户自定义目录', 'user']];
+  let dirHtml = '';
+  groups.forEach(([label, cat]) => {
+    const items = withPy.filter(s => (s.category === 'user') === (cat === 'user'));
+    if (items.length) dirHtml += `<optgroup label="${label}">` +
+      items.map(s => `<option value="${esc(s.dir)}">${esc(s.dir.split(/[\\/]/).pop())}</option>`).join('') + '</optgroup>';
+  });
+  $('#sfDir').innerHTML = dirHtml;
+  const fillPy = dir => {
+    const s = withPy.find(x => x.dir === dir) || {py_files: []};
+    $('#sfPy').innerHTML = s.py_files.map(p =>
+      `<option value="${esc(p.path)}">${esc(p.path.split(/[\\/]/).pop())}</option>`).join('');
+  };
+  $('#sfDir').onchange = () => fillPy($('#sfDir').value);
+
+  const addTimeRow = v => {
+    const div = document.createElement('div');
+    div.className = 'time-row rule-row';
+    div.innerHTML = `<input type="time" step="1" value="${v || ''}" title="该次执行的具体时间（时:分:秒）"> ` +
+      `<button class="link" title="删除该执行时间">删除</button>`;
+    div.querySelector('button').onclick = () => div.remove();
+    $('#sfTimes').appendChild(div);
+  };
+  const addWindowRow = (s, e) => {
+    const div = document.createElement('div');
+    div.className = 'time-row rule-row';
+    div.innerHTML = `<input type="time" step="1" class="sfWs" value="${s || ''}" title="时间段开始（时:分:秒）"> ~ ` +
+      `<input type="time" step="1" class="sfWe" value="${e || ''}" title="时间段结束（时:分:秒，可小于开始表示跨零点）"> ` +
+      `<button class="link" title="删除该时间段">删除</button>`;
+    div.querySelector('button').onclick = () => div.remove();
+    $('#sfWindows').appendChild(div);
+  };
+  const normTime = t => !t ? '' : (t.length === 5 ? t + ':00' : t);
+  const syncWindows = () => {
+    $('#sfWindowsBox').style.display = $('#sfAllTime').checked ? 'none' : '';
+  };
+  $('#sfAllTime').onchange = syncWindows;
+  $('#sfAddWindow').onclick = () => addWindowRow('', '');
+  $('#sfAddTime').onclick = () => addTimeRow('');
+  const syncType = () => {
+    const at = document.querySelector('input[name=sfType]:checked').value === 'at';
+    $('#sfAtBox').style.display = at ? '' : 'none';
+    $('#sfIntervalBox').style.display = at ? 'none' : '';
+  };
+  const syncMode = () => {
+    const mode = document.querySelector('input[name=sfMode]:checked').value;
+    $('#sfWeeklyBox').style.display = mode === 'weekly' ? '' : 'none';
+    $('#sfMonthlyBox').style.display = mode === 'monthly' ? '' : 'none';
+  };
+  document.querySelectorAll('input[name=sfType]').forEach(i => i.onchange = syncType);
+  document.querySelectorAll('input[name=sfMode]').forEach(i => i.onchange = syncMode);
+  $('#sfCancel').onclick = closePop;
+
+  if (task) {
+    // 编辑：按当前任务回填
+    const own = withPy.find(s => (task.script_path || '').startsWith(s.dir + '\\') ||
+                                  (task.script_path || '').startsWith(s.dir + '/'));
+    if (own) { $('#sfDir').value = own.dir; fillPy(own.dir); $('#sfPy').value = task.script_path; }
+    const sch = task.schedule || {};
+    const type = sch.type === 'interval' ? 'interval' : 'at';
+    document.querySelector(`input[name=sfType][value=${type}]`).checked = true;
+    if (type === 'at') {
+      const mode = ['daily', 'weekly', 'monthly'].includes(sch.mode) ? sch.mode : 'daily';
+      document.querySelector(`input[name=sfMode][value=${mode}]`).checked = true;
+      (sch.weekdays || []).forEach(d => { const c = document.querySelector(`.sfWd[value="${d}"]`); if (c) c.checked = true; });
+      if (sch.month_days) $('#sfMonthDays').value = sch.month_days.join(',');
+      (sch.times && sch.times.length ? sch.times : ['09:00:00']).forEach(addTimeRow);
+    } else {
+      $('#sfStart').value = (sch.start_at || '').replace(' ', 'T');
+      const iv = +sch.interval_sec || 60;
+      const unit = [86400, 3600, 60, 1].find(u => iv % u === 0 && iv / u >= 1) || 1;
+      $('#sfUnit').value = String(unit);
+      $('#sfEvery').value = String(Math.max(1, Math.round(iv / unit)));
+      // 允许执行的时间段回填（未配置 = 全部）
+      const wins = sch.time_windows || [];
+      $('#sfAllTime').checked = !wins.length;
+      wins.forEach(w => addWindowRow(w.start || '', w.end || ''));
+      if (!wins.length) addWindowRow('', '');
+    }
+  } else {
+    $('#sfDir').value = withPy[0].dir;
+    fillPy(withPy[0].dir);
+    addTimeRow('09:00:00');
+    addWindowRow('', '');
+  }
+  syncType();
+  syncMode();
+  syncWindows();
+
+  $('#sfSave').onclick = async () => {
+    const script_path = $('#sfPy').value;
+    if (!script_path) { toastMsg('请选择要执行的 Python 文件', 'err'); return; }
+    let schedule;
+    if (document.querySelector('input[name=sfType]:checked').value === 'at') {
+      const mode = document.querySelector('input[name=sfMode]:checked').value;
+      schedule = {type: 'at', mode};
+      if (mode === 'weekly') {
+        schedule.weekdays = [...document.querySelectorAll('.sfWd:checked')].map(i => +i.value);
+        if (!schedule.weekdays.length) { toastMsg('请选择每周星期几执行', 'err'); return; }
+      }
+      if (mode === 'monthly') {
+        schedule.month_days = $('#sfMonthDays').value.split(',')
+          .map(s => parseInt(s.trim(), 10)).filter(n => n >= 1 && n <= 31);
+        if (!schedule.month_days.length) { toastMsg('请填写每月第几日执行（1~31，逗号分隔）', 'err'); return; }
+      }
+      schedule.times = [...document.querySelectorAll('#sfTimes input[type=time]')]
+        .map(i => i.value).filter(Boolean).map(normTime);
+      if (!schedule.times.length) { toastMsg('请至少添加一个执行时间（时:分:秒）', 'err'); return; }
+    } else {
+      const start = $('#sfStart').value;
+      if (!start) { toastMsg('请填写开始时间', 'err'); return; }
+      const every = parseInt($('#sfEvery').value, 10);
+      if (!(every > 0)) { toastMsg('间隔数量需为正整数', 'err'); return; }
+      schedule = {type: 'interval',
+                  start_at: start.replace('T', ' ') + (start.length === 16 ? ':00' : ''),
+                  interval_sec: every * (+$('#sfUnit').value)};
+      // 允许执行的时间段：勾选"全部时间段"则不限制；否则收集非空起止行
+      if (!$('#sfAllTime').checked) {
+        const time_windows = [];
+        document.querySelectorAll('#sfWindows .time-row').forEach(row => {
+          const s = normTime(row.querySelector('.sfWs').value);
+          const e = normTime(row.querySelector('.sfWe').value);
+          if (s && e) time_windows.push({start: s, end: e});
+        });
+        if (!time_windows.length) { toastMsg('请至少添加一个起止完整的时间段，或勾选"全部时间段"', 'err'); return; }
+        schedule.time_windows = time_windows;
+      }
+    }
+    const opt = {method: task ? 'PUT' : 'POST',
+                 body: JSON.stringify({script_path, schedule})};
+    const url = task ? `/api/schedules/${task.id}` : '/api/schedules';
+    const res = await api(url, opt);
+    if (res.error) { toastMsg(res.error, 'err', 6000); return; }
+    toastMsg(task ? '已保存定时任务修改' : '已新增定时任务（默认启动）', 'ok');
+    closePop();
+    loadSchedules();
+  };
+}
+
+/* 查看执行日志：新页面展示日志记录，点击某个展示具体日志 */
+async function showSchedLogs(t) {
+  const title = '执行日志（' + shortScript(t.script_path) + '）';
+  let curDate = '';  // 记住日期筛选（查看日志内容返回后不丢失）
+  const render = async () => {
+    if ($('#logDate')) curDate = $('#logDate').value;
+    const date = curDate;
+    const r = await api(`/api/schedules/${t.id}/logs` + (date ? '?date=' + date : ''));
+    if (r.error) { toastMsg(r.error, 'err'); return; }
+    $('#popTitle').textContent = title;
+    $('#popBody').innerHTML =
+      '<div class="row">' +
+      '<span class="muted">按执行日期筛选</span>' +
+      '<input type="date" id="logDate" title="筛选该日期产生的执行日志" value="' + date + '">' +
+      '<button class="btn" id="logFilter" title="按所选日期过滤日志列表">筛选</button>' +
+      '<button class="link" id="logAll" title="清除日期筛选，展示全部执行日志">全部日志</button>' +
+      '<span class="muted" id="logStat"></span></div>' +
+      '<div class="pane" style="flex:1;overflow:auto;margin-top:8px">' +
+      '<table id="logTable"><thead><tr><th>日志文件</th><th>大小</th><th>修改时间</th><th></th></tr></thead><tbody></tbody></table>' +
+      '<div class="muted" id="logEmpty" style="padding:8px;display:none">（暂无执行日志）</div></div>';
+    const tbody = document.querySelector('#logTable tbody');
+    tbody.innerHTML = '';
+    const logs = r.logs || [];
+    $('#logEmpty').style.display = logs.length ? 'none' : '';
+    $('#logStat').textContent = logs.length ? `共 ${logs.length} 个日志文件` : '';
+    logs.forEach(x => {
+      const tr = document.createElement('tr');
+      tr.title = '单击打开查看具体日志';
+      tr.style.cursor = 'pointer';
+      const tstr = x.time.replace(/^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})$/, '$1-$2-$3 $4:$5:$6');
+      tr.innerHTML = `<td title="${esc(x.path)}">${esc(x.name)}</td>` +
+        `<td>${fmtSize(x.size)}</td><td>${esc(tstr)}</td><td></td>`;
+      tr.onclick = () => viewSchedLog(x.path, render);
+      const td = tr.lastChild;
+      const cp = document.createElement('button');
+      cp.className = 'link'; cp.textContent = '复制路径';
+      cp.title = '复制该日志文件的完整路径';
+      cp.onclick = ev => { ev.stopPropagation(); copyText(x.path); };
+      td.appendChild(cp);
+      tbody.appendChild(tr);
+    });
+    $('#logFilter').onclick = render;
+    $('#logAll').onclick = () => { $('#logDate').value = ''; render(); };
+    $('#logDate').onchange = render;
+  };
+  $('#overlay').style.display = 'block';
+  render();
+}
+function fmtSize(n) {
+  if (n == null) return '';
+  if (n < 1024) return n + ' B';
+  if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+  return (n / 1048576).toFixed(1) + ' MB';
+}
+async function viewSchedLog(path, back) {
+  const r = await api('/api/schedules/log_file?path=' + encodeURIComponent(path));
+  if (r.error) { toastMsg(r.error, 'err'); return; }
+  $('#popTitle').textContent = '执行日志 - ' + r.name;
+  $('#popBody').innerHTML =
+    '<div class="row" style="flex:none">' +
+    '<button class="btn" id="logBack" title="返回执行日志列表">返回日志列表</button>' +
+    '<button class="btn" id="logCopy" title="复制该日志文件的完整路径">复制路径</button>' +
+    '<span class="muted">' + esc(r.path) + '</span></div>' +
+    '<div class="pane" style="flex:1;overflow:auto;margin-top:8px"><pre></pre></div>';
+  document.querySelector('#popBody pre').textContent = r.content;
+  $('#logBack').onclick = back;
+  $('#logCopy').onclick = () => copyText(r.path);
+}
+
+/* ---------- 参数配置 ---------- */
+async function loadConf() {
+  const c = await api('/api/config');
+  $('#cfgPort').value = c.port; $('#cfgAuto').checked = c.auto_start;
+  $('#cfgSuffix').value = (c.suffix_filter || []).join('\n');
+  $('#cfgCt').value = (c.content_type_filter || []).join('\n');
+  $('#cfgTypeFilter').value = (c.type_filter || []).join('\n');
+  $('#cfgCdp').value = c.cdp_port; $('#cfgTimeout').value = c.exec_timeout_sec;
+}
+async function saveConf() {
+  const r = await api('/api/config', {method: 'PUT', body: JSON.stringify({
+    port: +$('#cfgPort').value, auto_start: $('#cfgAuto').checked,
+    suffix_filter: $('#cfgSuffix').value.split('\n').map(s => s.trim()).filter(Boolean),
+    content_type_filter: $('#cfgCt').value.split('\n').map(s => s.trim()).filter(Boolean),
+    type_filter: $('#cfgTypeFilter').value.split('\n').map(s => s.trim()).filter(Boolean),
+    cdp_port: +$('#cfgCdp').value, exec_timeout_sec: +$('#cfgTimeout').value})});
+  toast($('#confMsg'), r.ok ? '已保存。' + (r.note || '') : '保存失败', !r.ok);
+}
+
+/* ---------- Cookie 接收状态 ---------- */
+async function loadReceives() {
+  const r = await api('/api/cookies/receives');
+  $('#cookieSummary').textContent = `当前内存中 Cookie ${r.total} 条；最近推送：${r.last_push_time ? new Date(r.last_push_time * 1000).toLocaleString() : '从未'}`;
+  document.querySelector('#recvTable tbody').innerHTML = r.receives.map(x => {
+    const keys = Array.isArray(x.keys) ? x.keys : [];
+    const keysHtml = keys.length
+      ? keys.map(k => `<span class="badge">${esc(String(k))}</span>`).join(' ')
+      : '<span class="muted">无</span>';
+    const domains = Array.isArray(x.domains) ? x.domains : [];
+    const domainsHtml = domains.length
+      ? domains.map(d => `<span class="badge">${esc(String(d))}</span>`).join(" ")
+      : '<span class="muted">无</span>';
+    return `<tr><td>${esc(x.time)}</td><td>${x.profile || 0}</td><td>${esc(x.reason)}</td><td>${esc(x.address)}</td><td>${x.count}</td>` +
+    `<td><span class="badge ${x.success ? 'ok' : 'bad'}">${x.success ? '成功' : '失败'}</span></td>` +
+    `<td><button class="btn ghost recv-view" title="查看这次推送的Cookie对应的地址（域名或IP）、Cookie数量与key">查看</button></td></tr>` +
+    `<tr class="recv-detail" style="display:none"><td colspan="7" style="background:#fafbfc">` +
+    `<div class="muted">实例编号：${x.profile || 0}｜Cookie数量：${x.count}</div>` +
+    `<div style="margin-top:4px">Cookie对应的地址（域名或IP）：${domainsHtml}</div>` +
+    `<div style="margin-top:4px">Cookie key：${keysHtml}</div></td></tr>`;
+  }).join('');
+  document.querySelectorAll('#recvTable .recv-view').forEach(btn => {
+    btn.onclick = () => {
+      const row = btn.closest('tr');
+      const detail = row.nextElementSibling;
+      if (detail && detail.classList.contains('recv-detail')) {
+        const show = detail.style.display === 'none';
+        detail.style.display = show ? '' : 'none';
+        btn.textContent = show ? '收起' : '查看';
+      }
+    };
+  });
+}
+
+/* ---------- 使用说明（md 渲染，本地实现无外部依赖） ---------- */
+async function loadUsage() {
+  const r = await api('/api/usage');
+  const body = $('#usageBody');
+  const toc = $('#usageToc');
+  if (r.error) {
+    body.innerHTML = `<div class="muted" style="padding:10px">使用说明加载失败：${esc(r.error)}</div>`;
+    toc.innerHTML = '';
+    return;
+  }
+  const { html, toc: heads } = renderMarkdown(r.content || '');
+  body.innerHTML = html;
+  // 侧边目录：h1~h4，点击锚点跳转
+  toc.innerHTML = '<div class="toc-title">目录</div>' + heads.map(h =>
+    `<a data-anchor="${h.id}" class="lv${h.level}" title="${esc(h.text)}">${esc(h.text)}</a>`
+  ).join('');
+  toc.querySelectorAll('a[data-anchor]').forEach(a => {
+    a.onclick = () => {
+      const el = document.getElementById(a.dataset.anchor);
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    };
+  });
+  usageHeads = heads.map(h => ({ id: h.id, top: 0 }));
+  usageSyncTops();
+}
+
+/* 滚动时同步侧边目录当前节高亮 */
+let usageHeads = [];
+let usageScrollTimer = null;
+function usageSyncTops() {
+  usageHeads.forEach(h => {
+    const el = document.getElementById(h.id);
+    h.top = el ? el.getBoundingClientRect().top + window.scrollY : Infinity;
+  });
+}
+window.addEventListener('scroll', () => {
+  if (!$('#tab-usage').classList.contains('active') || !usageHeads.length) return;
+  if (usageScrollTimer) return;
+  usageScrollTimer = setTimeout(() => {
+    usageScrollTimer = null;
+    usageSyncTops();
+    const y = window.scrollY + 30;
+    let cur = usageHeads[0] ? usageHeads[0].id : null;
+    for (const h of usageHeads) if (h.top <= y) cur = h.id;
+    document.querySelectorAll('#usageToc a[data-anchor]').forEach(a =>
+      a.classList.toggle('active', a.dataset.anchor === cur));
+  }, 150);
+}, { passive: true });
+
+/* 轻量 markdown -> HTML：标题/段落/列表/代码/表格/引用/粗体/行内代码。
+   转义优先（先 esc 再插标签），代码块整体保护，不追求完整 md 规范。
+   返回 {html, toc}：toc 为标题数组（level/text/id），供侧边目录使用。 */
+function renderMarkdown(text) {
+  const lines = String(text).split('\n');
+  let html = [], inCode = false, listType = null, tableBuf = [], toc = [], hSeq = 0;
+  const closeList = () => { if (listType) { html.push(`</${listType}>`); listType = null; } };
+  const flushTable = () => {
+    if (!tableBuf.length) return;
+    const rows = tableBuf.map(l => l.replace(/^\|/, '').replace(/\|\s*$/, '').split('|').map(c => c.trim()));
+    // 第二行为分隔线时作表头
+    const isSep = i => /^:?-{2,}:?$/.test((rows[i] || [''])[0].replace(/\s/g, ''));
+    let out = '<table>';
+    rows.forEach((cells, i) => {
+      if (isSep(i)) return;
+      const tag = (i === 0 && rows.length > 1 && isSep(1)) ? 'th' : 'td';
+      out += `<tr>${cells.map(c => `<${tag}>${inlineMd(c)}</${tag}>`).join('')}</tr>`;
+    });
+    out += '</table>';
+    html.push(out);
+    tableBuf = [];
+  };
+  const inlineMd = s => esc(s)
+    .replace(/!\[([^\]]*)\]\(([^)]+)\)/g,
+      '<img src="$2" alt="$1" title="$1" style="max-width:100%;border:1px solid #d8dde3;border-radius:4px">')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
+  for (const line of lines) {
+    const t = line.trim();
+    if (t.startsWith('```')) {
+      if (inCode) { html.push('</code></pre>'); inCode = false; }
+      else { closeList(); flushTable(); html.push('<pre><code>'); inCode = true; }
+      continue;
+    }
+    if (inCode) { html.push(esc(line)); continue; }
+    if (!t) { closeList(); flushTable(); continue; }
+    if (t.startsWith('|')) { closeList(); tableBuf.push(t); continue; }
+    flushTable();
+    let m;
+    if ((m = t.match(/^(#{1,6})\s+(.*)$/))) {
+      closeList();
+      const lv = m[1].length;
+      // 锚点 id：序号保证唯一（标题可能重复/含中文），收集到 toc 供目录使用
+      const id = 'md-h-' + (++hSeq);
+      html.push(`<h${lv} id="${id}">${inlineMd(m[2])}</h${lv}>`);
+      if (lv <= 4) toc.push({ level: lv, text: m[2].replace(/[*`]/g, ''), id });
+    } else if ((m = t.match(/^[-*]\s+(.*)$/))) {
+      if (listType !== 'ul') { closeList(); html.push('<ul>'); listType = 'ul'; }
+      html.push(`<li>${inlineMd(m[1])}</li>`);
+    } else if ((m = t.match(/^\d+\.\s+(.*)$/))) {
+      if (listType !== 'ol') { closeList(); html.push('<ol>'); listType = 'ol'; }
+      html.push(`<li>${inlineMd(m[1])}</li>`);
+    } else if ((m = t.match(/^>\s?(.*)$/))) {
+      closeList();
+      html.push(`<blockquote>${inlineMd(m[1])}</blockquote>`);
+    } else {
+      closeList();
+      html.push(`<p>${inlineMd(t)}</p>`);
+    }
+  }
+  if (inCode) html.push('</code></pre>');
+  closeList();
+  flushTable();
+  return { html: html.join('\n'), toc };
+}
+
+/* ---------- 启动 ---------- */
+refreshStatus();
+(async () => { await loadHosts(); await loadCaptureConf(); })();  // 先网址后配置，保证勾选恢复
+connectWs();
+// 状态变化已由 WebSocket 实时推送（开始/暂停/结束/Chrome断开均广播 state），
+// 轮询仅作 WS 断连期间的兜底，拉长到 30 秒
+setInterval(refreshStatus, 30000);
+</script>
+</body>
+</html>

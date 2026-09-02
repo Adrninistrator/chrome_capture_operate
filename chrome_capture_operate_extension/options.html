@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>chrome_capture_operate 设置</title>
+<style>
+body { font-family: "Microsoft YaHei", sans-serif; max-width: 760px; margin: 0 auto; padding: 20px 16px; font-size: 13px; }
+h1 { font-size: 16px; margin: 0 0 8px; }
+label { display: block; margin: 8px 0 4px; font-weight: 600; }
+input[type=text] { width: 100%; padding: 5px 6px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
+input[type=number] { width: 90px; padding: 5px 6px; border: 1px solid #ccc; border-radius: 4px; }
+button { background: #1f3a5f; color: #fff; border: 0; border-radius: 4px; padding: 6px 14px; cursor: pointer; margin-top: 8px; }
+button.ghost { background: #e5e7eb; color: #222; }
+table { border-collapse: collapse; width: 100%; margin-top: 8px; font-size: 12px; }
+th, td { border: 1px solid #e3e6ea; padding: 4px 6px; text-align: left; }
+th { background: #f0f3f6; }
+.ok { color: #187a3c; }
+.bad { color: #b3392e; }
+.muted { color: #888; font-size: 12px; }
+#state { margin: 8px 0; font-weight: 600; }
+#scopeToast { display: none; background: #fff3e0; border: 1px solid #ff9800;
+  border-left: 5px solid #ff9800; color: #e65100; padding: 10px 14px;
+  border-radius: 4px; margin: 10px 0; font-weight: 600; font-size: 13px; }
+textarea { width: 100%; padding: 5px 6px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; font-family: Consolas, monospace; font-size: 12px; }
+.scope-box { border: 1px solid #e3e6ea; border-radius: 4px; padding: 8px 10px; margin-top: 4px; }
+.scope-box label { font-weight: normal; margin: 4px 0; }
+#scopeWarn { display: none; color: #b3392e; margin-top: 6px; }
+/* TAB 切换（参数配置 / 推送记录 / 会话保持 / 收藏并打开页面） */
+.tabs { display: flex; border-bottom: 2px solid #1f3a5f; margin: 14px 0 12px; }
+.tabs button { background: none; color: #333; border: 0; border-radius: 0; margin: 0; padding: 8px 18px; cursor: pointer; font-size: 14px; }
+.tabs button.active { background: #1f3a5f; color: #fff; }
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+/* 会话保持：行式编辑 */
+.ka-row { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
+.ka-row .ka-host { flex: 1; }
+.ka-row .ka-en { font-weight: normal; margin: 0; white-space: nowrap; }
+.ka-row button { margin-top: 0; padding: 4px 10px; }
+</style>
+</head>
+<body>
+<h1>chrome_capture_operate Cookie 推送 <span id="buildTime" class="muted" data-build="2026-09-02 21:05:42" style="font-size:12px;font-weight:normal"></span></h1>
+<div id="scopeToast"></div>
+<div id="state" class="muted">状态：检查中…</div>
+
+<div class="tabs">
+  <button class="tab-btn active" data-tab="cfg">参数配置</button>
+  <button class="tab-btn" data-tab="his">推送记录</button>
+  <button class="tab-btn" data-tab="ka">会话保持</button>
+  <button class="tab-btn" data-tab="bk">收藏并打开页面</button>
+</div>
+
+<!-- ============ TAB：参数配置 ============ -->
+<div class="tab-panel active" id="panel-cfg">
+  <label>Chrome实例编号（Chrome需要多开时人工指定，默认 0）</label>
+  <input type="number" id="myProfile" min="0" step="1" value="0" style="width:90px" title="本Chrome的实例编号：需要用Chrome打开同一个网站登录不同账号时，在每个实例的插件中分别配置不同的大于0的编号；仅一个Chrome（默认实例）保持 0 即可">
+  <div class="muted">需要用 Chrome 打开同一个网站登录不同账号时，由人工在每个实例的插件中把编号指定为不同的、大于 0 的值（与 Web 页"Chrome进程多开"创建的实例编号对应）；平时保持默认 0。修改后下一次推送生效。</div>
+
+  <label>推送目标地址（Python 服务）</label>
+  <input type="text" id="target">
+  <div class="muted">默认 http://127.0.0.1:33445/api/cookies/push；修改 Python 监听端口后需同步修改此处。</div>
+
+  <label>Cookie推送时间间隔</label>
+  <div>
+    cookie变更时的推送间隔：<input type="number" id="throttleSec" min="10" step="1"> 秒
+    <span class="muted">（默认 10，最小 10）</span>
+  </div>
+  <div>
+    定时推送间隔：<input type="number" id="heartbeatMin" min="1" step="0.5"> 分钟
+    <span class="muted">（默认 5，最小 1）</span>
+  </div>
+
+  <label>Cookie推送范围</label>
+  <div class="scope-box">
+    <label><input type="radio" name="scope" value="all"> 全部允许</label>
+    <label><input type="radio" name="scope" value="none"> 全部禁止</label>
+    <label><input type="radio" name="scope" value="list"> 按指定范围推送</label>
+    <div id="scopeWarn">当前为"全部禁止"：不会推送任何 Cookie，请修改为其他模式。</div>
+    <div id="listCfg" style="display:none;margin-top:6px">
+      <label>允许推送的域名或IP（每行一条，支持 * 通配符如 *.baidu.com；为空则全部推送）</label>
+      <textarea id="allowList" rows="3" placeholder="www.baidu.com&#10;*.baidu.com&#10;127.0.0.1"></textarea>
+      <label>不允许推送的域名或IP（每行一条，支持 * 通配符；为空则全部推送；优先级高于允许）</label>
+      <textarea id="denyList" rows="3" placeholder="*.internal.com&#10;192.168.*"></textarea>
+    </div>
+    <div class="muted">提示：不确定某个网站会访问哪些域名时，可通过 chrome_capture_operate_python（Web页面"抓包"TAB 的"需要抓包的网址"列表）查看该浏览器实际访问过的域名。</div>
+  </div>
+
+  <div>
+    <button id="save">保存</button>
+    <button id="reset" class="ghost">恢复默认</button>
+    <button id="pushNow" class="ghost">立即推送一次</button>
+    <button id="exportCfg" class="ghost" title="将全部配置参数导出为 .json 文件（不含推送记录等历史数据）">导出配置</button>
+    <button id="importCfg" class="ghost" title="从 .json 文件导入配置参数，导入后立即生效">导入配置</button>
+    <input type="file" id="importFile" accept=".json,application/json" style="display:none">
+  </div>
+</div>
+
+<!-- ============ TAB：推送记录 ============ -->
+<div class="tab-panel" id="panel-his">
+  <div class="row" style="margin-bottom:8px">
+    <button id="pushNow2" title="立即推送一次Cookie到Python服务">立即推送Cookie</button>
+    <button id="refreshHis" class="ghost" title="刷新推送记录列表（重新读取本地存储）">刷新</button>
+  </div>
+  <label>最近 20 次推送记录</label>
+  <table>
+    <thead><tr><th>时间</th><th>实例编号</th><th>原因</th><th>地址</th><th>数量</th><th>结果</th><th>操作</th></tr></thead>
+    <tbody id="history"></tbody>
+  </table>
+</div>
+
+<!-- ============ TAB：会话保持 ============ -->
+<div class="tab-panel" id="panel-ka">
+  <div class="muted">目的：定时刷新 Chrome 中已打开的对应域名或IP页面，保持目标网站的登录会话，避免长时间不访问导致 Cookie 失效。注意：刷新会使页面上未保存的输入丢失；刷新引起的 Cookie 变化会自动走原有推送机制。</div>
+  <label>会话保持配置（每项：域名或IP + 刷新间隔分钟，支持单独启用/禁用）</label>
+  <div id="kaRows"></div>
+  <div>
+    <button id="kaAdd" class="ghost" title="新增一行会话保持配置">添加一项</button>
+    <button id="kaSave" title="保存会话保持配置（保存后立即生效）">保存</button>
+    <button id="kaReset" class="ghost" title="清空全部会话保持配置">恢复默认</button>
+  </div>
+  <div class="muted">机制：每个启用的配置项对应一个独立的定时任务（周期=该项刷新间隔，到点即触发）——匹配的页面中有非活动标签页（打开着但当前未选中的标签页）时，直接刷新第一个非活动标签页（其余页面不动）；仅当匹配的页面全部为当前活动标签页时，才对第一个页面弹窗确认是否刷新（取消后到下个间隔才会再次询问）；没有打开对应页面时不刷新、下个间隔再检查（会话保持依赖该页面保持在 Chrome 中打开）。域名或IP不含端口（按任意端口匹配）。</div>
+  <div class="muted">日志：每次刷新的完整过程（当前配置、找到的标签页与网址、刷新决策与结果）输出在扩展后台的 console 中——打开 chrome://extensions → 找到本插件 → 点击"Service Worker"（检查）即可查看。</div>
+</div>
+
+
+<!-- ============ TAB：收藏并打开页面 ============ -->
+<div class="tab-panel" id="panel-bk">
+  <div class="muted">浏览器中需要长期打开大量网页时，可收藏后批量打开——浏览器或操作系统重启后快速恢复一组工作页面。每条收藏可勾选"启动时自动打开"（同时只能勾选一条）：勾选后 Chrome 启动时自动按列表顺序批量打开该条收藏的全部页面；新收藏创建时若当前没有勾选其他收藏则默认勾选。</div>
+  <div>
+    <button id="bkCollect" title="把当前所有打开的网页收藏为一条新记录（记录页面标题与地址）">收藏当前已打开页面</button>
+    <button id="bkExport" class="ghost" title="将全部收藏记录导出为 .json 文件（收藏数据独立于配置参数；为防扩展移除丢失，建议定期导出备份）">导出收藏</button>
+    <button id="bkImport" class="ghost" title="从 .json 文件导入收藏记录（整体替换现有收藏）">导入收藏</button>
+    <input type="file" id="bkImportFile" accept=".json,application/json" style="display:none">
+  </div>
+  <div id="bkList"></div>
+</div>
+
+<script src="options.js"></script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+.idea/
+.venv/
+.claude/
+chrome_capture_operate_python/tests/
+docs/
+prompt/
+抓包记录/

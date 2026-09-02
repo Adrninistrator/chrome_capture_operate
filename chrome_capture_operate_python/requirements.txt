@@ -1,0 +1,6 @@
+fastapi>=0.110
+uvicorn>=0.29
+websockets>=12
+pystray>=0.19
+pillow>=10
+requests>=2.31
