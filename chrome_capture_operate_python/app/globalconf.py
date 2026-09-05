@@ -21,6 +21,7 @@ GLOBAL_CONF_PATH = os.path.join(GLOBAL_CONF_DIR, "global_conf.json")
 
 # 全局配置已知的 key（校验/说明用；其他 key 按通用读写处理）
 KEY_SCRIPTS_DIR = "python_scripts_dir_path"
+KEY_AUTO_START = "auto_start"  # 是否开机自启动（"true"/"false"，config 读写）
 KEY_SCHEDULES = "schedules"   # 定时执行任务（结构化，Scheduler 读写）
 KEY_MULTI_PROFILE = "chrome_multi_profile"  # Chrome 多开实例（结构化，webapp 读写）
 KEY_FAVORITE_PAGES = "favorite_pages"  # 收藏的页面记录（结构化，webapp 读写）

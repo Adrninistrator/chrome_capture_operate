@@ -957,11 +957,14 @@ def create_app():
     @app.put("/api/config")
     async def put_conf(body: ConfBody):
         updates = {k: v for k, v in body.dict().items() if v is not None}
-        config.update(**updates)
-        return {"ok": True,
-                "note": "监听端口与 CDP 端口修改后需重启 Python 脚本生效；"
-                        "修改监听端口后需同步修改 Chrome 插件 "
-                        "chrome_capture_operate_extension 中的推送目标地址"}
+        res = config.update(**updates)
+        note = ("监听端口与 CDP 端口修改后需重启 Python 脚本生效；"
+                "修改监听端口后需同步修改 Chrome 插件 "
+                "chrome_capture_operate_extension 中的推送目标地址")
+        if res and not res.get("auto_start_registry_ok"):
+            note = ("警告：开机自启动注册表写入失败，参数已保存，"
+                    "重启程序后将自动重试。" + note)
+        return {"ok": True, "note": note}
 
     @app.get("/api/api_md_path")
     async def api_md_path():

@@ -1,6 +1,5 @@
 {
   "port": 33445,
-  "auto_start": false,
   "suffix_filter": [
     ".js",
     ".mjs",

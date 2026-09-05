@@ -18,7 +18,8 @@ if __package__ in (None, ""):
         os.path.abspath(__file__))))
     __package__ = "app"
 
-from .config import Config, LOG_DIR, ensure_dirs  # noqa: E402
+from .config import (Config, LOG_DIR, ensure_dirs,  # noqa: E402
+                     ensure_auto_start)
 from .logutil import setup_logging  # noqa: E402
 
 
@@ -71,6 +72,12 @@ def main():
         msgbox("chrome_capture_operate 已在运行（端口 %d），不支持重复启动"
                % port)
         sys.exit(1)
+
+    # 自启动同步：参数值（是否自启动）在全局配置文件（需求），注册表为
+    # 落地实现。启动时按参数值同步注册表：失效/误删时按当前路径重建，
+    # 指向其他有效副本时尊重不抢，未启用则清除（详见 ensure_auto_start）。
+    if ensure_auto_start():
+        log.info("开机自启动已启用")
 
     from .logutil import uvicorn_log_config
     from .webapp import create_app
