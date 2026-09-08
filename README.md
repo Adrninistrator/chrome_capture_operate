@@ -129,20 +129,23 @@ Web 管理页面（`http://127.0.0.1:33445`）共八个标签页：
 
 ### 安装Chrome插件
 
-0. 快捷方式：点击页面右上角的**安装Chrome插件**按钮（所有标签页都可见）——打开安装说明窗口，其中展示 Chrome 插件管理页面地址与插件目录（各带**复制**按钮）及完整安装步骤；按窗口说明操作即可，也可按下面步骤手动操作
+0. 快捷方式：点击页面右上角的**安装Chrome插件**按钮（所有标签页都可见），打开安装说明窗口
 
 ![安装Chrome插件](pics/安装Chrome插件.png)
 
-1. 在 Chrome 中打开扩展管理页面：地址栏输入 `chrome://extensions` 回车；或先打开 Chrome"设置"页面，再点击"扩展程序"
-2. 右上角开启**开发者模式**，点击**加载未打包的扩展程序**，选择 `chrome_capture_operate_extension` 目录
+1. 点击 chrome_capture_operate 安装Chrome插件页面第一个复制按钮，在 Chrome 打开新的页面，在地址栏粘贴后回车（会输入 `chrome://extensions`），打开 Chrome 扩展程序页面
 
 ![chrome_extension_安装_1](pics/chrome_extension_安装_1.png)
 
+2. 点击 chrome_capture_operate 安装Chrome插件页面第二个复制按钮，在 Chrome 扩展程序页面右上角开启**开发者模式**，点击**加载未打包的扩展程序**，在文件夹中粘贴刚才复制的地址，点击**选择文件夹**
+
 ![chrome_extension_安装_2](pics/chrome_extension_安装_2.png)
+
+安装完毕后在 Chrome 扩展程序页面会出现扩展程序 chrome_capture_operate
 
 ![chrome_extension_安装_3](pics/chrome_extension_安装_3.png)
 
-3. 打开插件页面：点击 Chrome 右上角的**扩展程序**按钮，在出现的选择目录窗口中粘贴插件的目录，安装完毕后在Chrome扩展程序页面会出现插件chrome_capture_operate，需要保证处于开启状态
+3. 打开插件页面：点击 Chrome 右上角的**扩展程序**按钮，在出现的选择目录窗口中粘贴插件的目录，安装完毕后在 Chrome 扩展程序页面会出现插件chrome_capture_operate，需要保证处于开启状态
 
 ![chrome_extension_打开](pics/chrome_extension_打开.png)
 
