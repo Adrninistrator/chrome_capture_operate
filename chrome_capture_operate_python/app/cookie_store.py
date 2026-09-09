@@ -10,6 +10,9 @@
   "分区站点=查询主机 > 未分区 > 其他分区" 取一条（与浏览器随请求
   发送的行为一致：只有与请求顶级站点一致的分区才会随请求携带）。
 - 记录最近 50 次接收情况（时间/原因/地址/数量/成功失败），与插件推送记录字段一致。
+- Authorization 一并接收/查询（推送可选字段，向下兼容）：与 cookie 同按
+  profile 维度整体替换；Authorization 是站点自己设置的请求头，不跨域
+  携带，故查询按精确主机匹配（区别于 cookie 的后缀匹配）。
 """
 import threading
 import time
@@ -23,6 +26,8 @@ class CookieStore:
         # Chrome profile（多开实例）编号 -> {(domain,path,name,partition): dict}
         # 编号 0 = 未设置编号的插件（默认实例），兼容未配置多开的推送
         self._stores = {0: {}}
+        # profile -> {host: Authorization 值}（host 小写归一）
+        self._auths = {0: {}}
         self._receives = deque(maxlen=50)
         self.last_push_time = None  # 最近一次成功推送时间戳
 
@@ -33,6 +38,13 @@ class CookieStore:
             self._stores[pid] = {}
         return self._stores[pid]
 
+    def _auth_store(self, profile_id):
+        """取（或惰性建）指定编号的 Authorization 存储。"""
+        pid = int(profile_id or 0)
+        if pid not in self._auths:
+            self._auths[pid] = {}
+        return self._auths[pid]
+
     # ---------- 接收 ----------
     @staticmethod
     def _partition_site(c):
@@ -42,12 +54,16 @@ class CookieStore:
             return str(pk.get("topLevelSite") or "")
         return str(pk or "")
 
-    def receive(self, cookies, reason, source_addr, profile_id=None):
+    def receive(self, cookies, reason, source_addr, profile_id=None,
+                authorizations=None):
         """接收插件推送（整体替换该编号实例的快照）。
 
         profile_id 为插件设置的"本实例编号"（多开区分），未设置为 0。
+        authorizations 为插件观察到的 Authorization 列表
+        （[{host, value}]，可选——旧扩展不传，保持原行为）。
+        返回 (ok, cookie_count, auth_count)。
         """
-        ok, count = True, 0
+        ok, count, auth_count = True, 0, 0
         try:
             if not isinstance(cookies, list):
                 raise ValueError("cookies 必须是数组")
@@ -71,9 +87,22 @@ class CookieStore:
                     "partitionSite": site,
                 }
             count = len(new)
+            # Authorization 整体替换该 profile 的映射（host 小写归一；
+            # 空值条目跳过——观察到的"值消失"由 host 缺失表达）
+            new_auth = {}
+            if isinstance(authorizations, list):
+                for a in authorizations:
+                    if not isinstance(a, dict):
+                        continue
+                    host = str(a.get("host") or "").strip().lower()
+                    value = str(a.get("value") or "")
+                    if host and value:
+                        new_auth[host] = value
+            auth_count = len(new_auth)
             with self._lock:
                 self._store(profile_id if profile_id is not None else 0)
                 self._stores[int(profile_id or 0)] = new
+                self._auths[int(profile_id or 0)] = new_auth
                 self.last_push_time = time.time()
         except Exception:
             ok = False
@@ -83,6 +112,7 @@ class CookieStore:
                 "reason": reason or "未知",
                 "address": source_addr or "",
                 "count": count,
+                "auth_count": auth_count,
                 "profile": int(profile_id or 0),
                 # 域名去点（.qq.com -> qq.com）后去重排序（与插件推送记录
                 # domains 口径一致）。注意：元素必须是自包含表达式——若把
@@ -95,6 +125,15 @@ class CookieStore:
                      else str(c.get("domain", ""))
                      for c in (cookies or [])
                      if isinstance(c, dict) and c.get("domain")}),
+                # Authorization 所属地址（独立字段，页面与 Cookie 的 domains
+                # 分开展示——排查 auth 推没推到哪台主机）。与 new_auth 同口径
+                # 过滤空值：曾带过 Authorization 的主机后来不再带（多数接口
+                # 无此头）不构成有效地址
+                "auth_domains": sorted(
+                    {str(a.get("host") or "").strip().lower()
+                     for a in (authorizations or [])
+                     if isinstance(a, dict) and a.get("host")
+                     and str(a.get("value") or "")}),
                 # cookie name 去重排序（多条 cookie 常有重名 key）
                 "keys": sorted(
                     {str(c.get("name", ""))
@@ -102,7 +141,7 @@ class CookieStore:
                      if isinstance(c, dict) and c.get("name")}),
                 "success": ok,
             })
-        return ok, count
+        return ok, count, auth_count
 
     def receives(self):
         with self._lock:
@@ -151,6 +190,35 @@ class CookieStore:
                               % (host, pid))
             return None, "没有与主机 %s 匹配的 Cookie（插件可能尚未推送该网站的 Cookie）" % host
         return self._pick_variants(matched, host), None
+
+    def query_auth(self, url_or_host, profile_id=None):
+        """按精确主机匹配返回该主机观察到的 Authorization 值。
+
+        Authorization 是站点自己设置的请求头（不跨域携带），与 cookie 的
+        后缀匹配语义不同，只做精确主机匹配（大小写归一）。
+        profile 语义与 query 一致：空/0 查所有 profile 查到即返回；非 0 仅
+        查指定编号。返回值：命中的 Authorization 字符串，无匹配为 None。
+        """
+        if not url_or_host:
+            return None
+        host = url_or_host.strip()
+        if "://" in host:
+            host = urlsplit(host).hostname or ""
+        else:
+            host = host.split("/")[0].split(":")[0]
+        host = host.lower()
+        if not host:
+            return None
+        pid = int(profile_id) if profile_id not in (None, "", 0) else None
+        with self._lock:
+            if pid is not None:
+                auth_stores = [self._auths.get(pid, {})]
+            else:
+                auth_stores = list(self._auths.values())
+            for s in auth_stores:
+                if host in s:
+                    return s[host]
+        return None
 
     @staticmethod
     def _variant_rank(c, host):

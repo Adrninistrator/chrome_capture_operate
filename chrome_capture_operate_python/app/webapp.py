@@ -8,6 +8,7 @@
 import asyncio
 import logging
 import os
+from urllib.parse import urlsplit
 import re
 import subprocess
 from contextlib import asynccontextmanager
@@ -711,12 +712,14 @@ def create_app():
         reason: str = "未知"
         cookies: list = []
         profile: int = 0   # Chrome profile（多开实例）编号，未设置为 0
+        authorizations: list = []   # 插件观察到的 Authorization（{host, value}；旧扩展不传）
 
     @app.post("/api/cookies/push")
     async def cookies_push(body: PushBody, request: Request):
         source = request.client.host if request.client else ""
-        ok, count = store.receive(body.cookies, body.reason, source,
-                                   body.profile)
+        ok, count, auth_count = store.receive(
+            body.cookies, body.reason, source, body.profile,
+            body.authorizations)
         if ok:
             # 记录目标服务器地址（cookie域名）、数量与 key（只记名，值不落
             # 日志——脱敏要求）；保留来源地址便于定位多浏览器互相覆盖问题
@@ -731,7 +734,7 @@ def create_app():
                      count, keys or "无")
             # 数量为 0 时广播红色提醒（prompt.md 接收Cookie功能要求）：
             # 可能是插件未设置推送Cookie范围（默认全部禁止）
-            if count == 0:
+            if count == 0 and auth_count == 0:
                 await ws_clients.broadcast({
                     "type": "cookie_push_empty",
                     "profile": body.profile,
@@ -746,19 +749,37 @@ def create_app():
     @app.get("/api/cookies/query")
     async def cookies_query(url: str = Query(...),
                             profile: int = Query(0)):
-        """profile 为 0（默认）时查所有 Chrome profile；非 0 查指定编号。"""
+        """profile 为 0（默认）时查所有 Chrome profile；非 0 查指定编号。
+
+        Authorization 按 Cookie 请求的同一主机精确匹配（不跨域携带）；
+        cookie 与 Authorization 均无匹配才返回 404（向下兼容：cookie 命中
+        或 Authorization 命中即 200；纯 Authorization 站点 cookies 为空数组）。
+        """
         cookies, err = store.query(url, profile)
-        if err:
+        auth = store.query_auth(url, profile)
+        if err and auth is None:
             log.info("获取cookie请求 url=%s profile=%d 失败: %s",
                      url, profile, err)
             return JSONResponse({"ok": False, "error": err}, status_code=404)
+        # 纯 Authorization 站点：query 返回 None，归一为空数组（响应字段
+        # 类型稳定，旧脚本按列表处理不炸）
+        if cookies is None:
+            cookies = []
         # 只记录数量与 key，不记录 cookie 值（日志脱敏要求）
         keys = ",".join(c.get("name", "") for c in cookies)
         log.info("获取cookie请求 url=%s profile=%d 返回 %d 条 cookie（key: %s）",
                  url, profile, len(cookies), keys or "无")
+        h = url.strip()
+        if "://" in h:
+            h = urlsplit(h).hostname or ""
+        else:
+            h = h.split("/")[0].split(":")[0]
+        authorizations = ([{"host": h.lower(), "value": auth}] if auth else [])
         return {"ok": True,
                 "cookies": cookies,
-                "cookie_header": CookieStore.cookie_header(cookies)}
+                "cookie_header": CookieStore.cookie_header(cookies),
+                "authorizations": authorizations,
+                "authorization": auth or ""}
 
     @app.get("/api/cookies/receives")
     async def cookies_receives():

@@ -1751,12 +1751,17 @@ async function loadReceives() {
     const domainsHtml = domains.length
       ? domains.map(d => `<span class="badge">${esc(String(d))}</span>`).join(" ")
       : '<span class="muted">无</span>';
+    const authDomains = Array.isArray(x.auth_domains) ? x.auth_domains : [];
+    const authHtml = authDomains.length
+      ? authDomains.map(d => `<span class="badge">${esc(String(d))}</span>`).join(" ")
+      : '<span class="muted">无</span>';
     return `<tr><td>${esc(x.time)}</td><td>${x.profile || 0}</td><td>${esc(x.reason)}</td><td>${esc(x.address)}</td><td>${x.count}</td>` +
     `<td><span class="badge ${x.success ? 'ok' : 'bad'}">${x.success ? '成功' : '失败'}</span></td>` +
-    `<td><button class="btn ghost recv-view" title="查看这次推送的Cookie对应的地址（域名或IP）、Cookie数量与key">查看</button></td></tr>` +
+    `<td><button class="btn ghost recv-view" title="查看这次推送的Cookie对应的地址（域名或IP）、推送的Authorization所属地址、Cookie的key">查看</button></td></tr>` +
     `<tr class="recv-detail" style="display:none"><td colspan="7" style="background:#fafbfc">` +
-    `<div class="muted">实例编号：${x.profile || 0}｜Cookie数量：${x.count}</div>` +
+    `<div class="muted">实例编号：${x.profile || 0}｜Cookie数量：${x.count}${x.auth_count ? '｜Authorization数量：' + x.auth_count : ''}</div>` +
     `<div style="margin-top:4px">Cookie对应的地址（域名或IP）：${domainsHtml}</div>` +
+    `<div style="margin-top:4px">Authorization所属地址：${authHtml}</div>` +
     `<div style="margin-top:4px">Cookie key：${keysHtml}</div></td></tr>`;
   }).join('');
   document.querySelectorAll('#recvTable .recv-view').forEach(btn => {

@@ -123,15 +123,21 @@ function renderHistory(history) {
       h.domainsHtml = domains.length
         ? domains.map((d) => `<span class="badge">${escHtml(String(d))}</span>`).join(" ")
         : '<span class="muted">无</span>';
+      // Authorization 所属地址：authDomains（background 推送记录写入）
+      const authDomains = Array.isArray(h.authDomains) ? h.authDomains : [];
+      const authHtml = authDomains.length
+        ? authDomains.map((d) => `<span class="badge">${escHtml(String(d))}</span>`).join(" ")
+        : '<span class="muted">无</span>';
       return `<tr><td>${h.time}</td><td>${h.profile || 0}</td><td>${escHtml(String(h.reason))}</td>` +
         `<td>${escHtml(String(h.address))}</td>` +
         `<td>${h.count}</td><td class="${h.success ? "ok" : "bad"}">${
           h.success ? "成功" : "失败"
         }</td>` +
-        `<td><button class="ghost bk-view" data-i="${i}" title="查看这次推送的Cookie对应的地址（域名或IP）、Cookie数量与key">查看</button></td>` +
+        `<td><button class="ghost bk-view" data-i="${i}" title="查看这次推送的Cookie对应的地址（域名或IP）、推送的Authorization所属地址、Cookie的key">查看</button></td>` +
         `<tr class="his-detail" style="display:none"><td colspan="7" style="background:#fafbfc">` +
-        `<div class="muted">实例编号：${h.profile || 0}｜Cookie数量：${h.count}</div>` +
+        `<div class="muted">实例编号：${h.profile || 0}｜Cookie数量：${h.count}${h.authCount ? "｜Authorization数量：" + h.authCount : ""}</div>` +
         `<div style="margin-top:4px">Cookie对应的地址（域名或IP）：${h.domainsHtml}</div>` +
+        `<div style="margin-top:4px">Authorization所属地址：${authHtml}</div>` +
         `<div style="margin-top:4px">Cookie key：${keysHtml}</div></td></tr>`;
     })
     .join("");

@@ -4,12 +4,24 @@
  * 推送时机：
  *  - 启动时（onStartup / onInstalled）
  *  - chrome.cookies.onChanged 变更时（节流间隔可配，默认 10 秒，最小 10 秒；
- *    间隔内累积的变更打标记，由补偿 alarm 补推）
+ *    间隔内累积的变更打标记，由定时 alarm 补推）
+ *  - Authorization 变化时（webRequest.onSendHeaders 观察请求头中的
+ *    Authorization，观察地址先过推送范围管道，值与上次观察值不同时
+ *    才标脏触发）
  *  - 定时推送（间隔可配，默认 5 分钟，最小 1 分钟）
+ *
+ * 变更推送的触发条件（prompt.md：仅范围内变更且值有真实差异才推）：
+ *  - onChanged 回调先按 changeInfo.cookie 做范围预判——范围外变更直接
+ *    忽略，连节流标记都不打；
+ *  - 待推送快照与"上次成功推送的快照"（storage.session，生命周期与浏览器
+ *    会话一致）diff：key 为 domain/path/name/分区，比 value；无新增/
+ *    删除/值变化（同值重写不算）则跳过推送；
+ *  - 推送失败保留旧快照作基准，服务端未确认的变更下次重推；
+ *  - 启动时/定时推送/手动推送不受 diff 限制（需求：必推时机）。
  *
  * 推送范围（可配，storage.local.push_scope）：
  *  - all：全部允许
- *  - none：全部禁止（默认；不推送任何 Cookie）
+ *  - none：全部禁止（默认；不推送任何 Cookie/Authorization）
  *  - list：按清单推送——allow 清单任一匹配才推送（空=全部推送），
  *    deny 清单任一匹配即不推送（空=全部推送）；deny 优先于 allow。
  *    清单项为域名或 IP，支持 * 通配符（如 *.baidu.com）。
@@ -54,6 +66,29 @@ const DEFAULT_KA_INTERVAL_MIN = 30;
 
 let lastPushAt = 0;
 let dirtySinceThrottle = false;
+
+// ---- 变更推送的"值比较"基准（storage.session，会话级内存）----
+// SNAPSHOT_KEY：上次成功推送的 cookie 快照（map: ckKey -> value）。
+// AUTH_MAP_KEY：观察到的 Authorization 最近值（map: host -> 值）。
+// Service Worker 被杀不丢（storage.session），浏览器重启清零——重启后
+// 首次推送必发（与"启动时推送"重叠，语义一致）。
+const SNAPSHOT_KEY = "last_push_snapshot";
+const AUTH_MAP_KEY = "auth_map";
+
+/** cookie 的 diff 键 -> 待比较值（与 ckKey 同维：分区/子域等全含）。 */
+function cookieDiffEntry(c) {
+  return [ckKey(c), String(c.value || "")];
+}
+
+/** 两快照是否有真实差异（新增/删除/值变化；同值重写不算）。 */
+function snapshotDiffers(prev, next) {
+  if (!prev) return true;
+  const keys = new Set([...Object.keys(prev), ...Object.keys(next)]);
+  for (const k of keys) {
+    if (prev[k] !== next[k]) return true;
+  }
+  return false;
+}
 
 // 点击插件图标：在 Chrome 中以新标签页打开设置页面（prompt.md 页面要求，
 // 不使用 popup 小窗；options.html 内部以 参数配置/推送记录/会话保持 三个 TAB 展示）
@@ -226,17 +261,15 @@ async function getAllCookiesWithPartitions(cfg) {
   return merged;
 }
 
-async function pushAll(reason) {
+async function pushAll(reason, opts = {}) {
   const cfg = await getConfig();
   const target = cfg.target;
-  // 本Chrome实例编号（多开对号）：插件"参数配置"页人工设置（默认 0，
-  // 即默认实例；需同一网站多账号时人工设为对应实例编号）——扩展无法
-  // 自动感知所处 Chrome 环境（详见 docs/design-profile-id.md）。
   const { my_profile } = await chrome.storage.local.get("my_profile");
   const profile = parseInt(my_profile, 10) || 0;
-  lastPushAt = Date.now();
-  dirtySinceThrottle = false;
+  // 变更推送（reason 含"变更"）走值比较；必推时机（启动/定时/手动）不走
+  const checkDiff = !!opts.checkDiff || /变更/.test(reason);
   let cookies = [];
+  let authorizations = [];
   let success = false;
   let skipped = 0;
   try {
@@ -246,12 +279,40 @@ async function pushAll(reason) {
       if (!ok) skipped += 1;
       return ok;
     });
+    // Authorization 一并推送（观察到的范围内主机的最近值）
+    authorizations = await getAuthList(cfg);
+    // 值比较：与上次成功推送的快照无真实差异则跳过（不更新 lastPushAt、
+    // 不记推送记录——什么都没发；基准保留，下次变更仍会触发）
+    if (checkDiff) {
+      const { [SNAPSHOT_KEY]: prev } = await chrome.storage.session.get(
+        SNAPSHOT_KEY);
+      const next = Object.fromEntries(cookies.map(cookieDiffEntry));
+      const { [AUTH_MAP_KEY]: authSnap = {} } =
+        await chrome.storage.session.get(AUTH_MAP_KEY);
+      const authNext = Object.fromEntries(
+        authorizations.map((a) => [a.host, a.value]));
+      if (!snapshotDiffers(prev || {}, next)
+          && !snapshotDiffers(authSnap || {}, authNext)) {
+        return { success: true, count: cookies.length, skipped,
+                 skippedNoDiff: true };
+      }
+    }
+    lastPushAt = Date.now();
+    dirtySinceThrottle = false;
     const resp = await fetch(target, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ reason, cookies, profile }),
+      body: JSON.stringify({ reason, cookies, authorizations, profile }),
     });
     success = resp.ok;
+    // 推送成功才更新快照基准（失败的变更保留下次重推）
+    if (success) {
+      await chrome.storage.session.set({
+        [SNAPSHOT_KEY]: Object.fromEntries(cookies.map(cookieDiffEntry)),
+        [AUTH_MAP_KEY]: Object.fromEntries(
+          authorizations.map((a) => [a.host, a.value])),
+      });
+    }
   } catch (e) {
     success = false;
   }
@@ -260,20 +321,82 @@ async function pushAll(reason) {
     reason,
     address: target,
     count: cookies.length,
-    domains: [...new Set(cookies.map((c) => (c.domain || "").replace(/^\./, "")))],
+    authCount: authorizations.length,
+    domains: [...new Set(
+      cookies.map((c) => (c.domain || "").replace(/^\./, "")))],
+    // Authorization 所属地址（与 Cookie 的 domains 分开展示，便于排查
+    // "auth 推没推到哪台主机"）
+    authDomains: [...new Set(authorizations.map((a) => a.host))],
     keys: cookies.map((c) => c.name),
     profile,
     success,
   });
   await setBadge(success);
-  return { success, count: cookies.length, skipped };
+  return { success, count: cookies.length, authCount: authorizations.length,
+           skipped };
 }
 
 /** 节流推送：距上次 >= 间隔立即推；否则打标记等补偿 */
+// ---------- Authorization 观察（webRequest.onSendHeaders 只读） ----------
+
+/** 主机是否在推送范围内（与 cookie 同一 scope/allow/deny 管道）。
+ *  host 为请求的精确主机（Authorization 不跨域携带，按精确匹配语义，
+ *  不做 cookie 的子域后缀匹配）。 */
+function hostAllowed(host, cfg) {
+  if (cfg.scope === "none") return false;
+  if (cfg.scope !== "list") return true; // all
+  if (cfg.deny.some((p) => matchHost(p, host))) return false;
+  if (cfg.allow.length === 0) return true; // 空 allow = 全部推送
+  return cfg.allow.some((p) => matchHost(p, host));
+}
+
+/** 当前观察到的范围内 Authorization 列表（推送 payload 用）。 */
+async function getAuthList(cfg) {
+  const { [AUTH_MAP_KEY]: map = {} } =
+    await chrome.storage.session.get(AUTH_MAP_KEY);
+  return Object.entries(map)
+    .map(([host, value]) => ({ host, value }))
+    .filter((a) => a.value && hostAllowed(a.host, cfg));
+}
+
+/** 观察请求头中的 Authorization：范围内主机的值变化时标脏触发推送。
+ *  只读观察（onSendHeaders 不改请求）；同值重复请求不触发。
+ *  不带 Authorization 的请求直接忽略——同一站点多数接口不带该头
+ *  （如仅登录/鉴权接口带），把 map[host] 记成空串会让"从未有值"的主机
+ *  也出现在 Authorization 所属地址里（无效噪音）；值真实消失的场景由
+ *  推送整体替换语义自然处理（服务端按快照全量替换）。 */
+function observeAuthHeaders(details) {
+  (async () => {
+    try {
+      const headers = details.requestHeaders || [];
+      const auth = headers.find(
+        (h) => h.name && h.name.toLowerCase() === "authorization");
+      if (!auth || !auth.value) return; // 本请求未带 Authorization
+      const host = normalizeHost(
+        new URL(details.url).hostname) || details.url;
+      const value = auth.value;
+      const cfg = await getConfig();
+      if (!hostAllowed(host, cfg)) return; // 范围外：连标脏都不做
+      const { [AUTH_MAP_KEY]: map = {} } =
+        await chrome.storage.session.get(AUTH_MAP_KEY);
+      if (map[host] === value) return; // 值未变（重复请求同值）
+      map[host] = value;
+      await chrome.storage.session.set({ [AUTH_MAP_KEY]: map });
+      pushThrottled("Authorization变更");
+    } catch (e) { /* URL 解析失败等忽略 */ }
+  })();
+}
+
+chrome.webRequest.onSendHeaders.addListener(
+  observeAuthHeaders,
+  { urls: ["<all_urls>"] },
+  ["requestHeaders"]
+);
+
 async function pushThrottled(reason) {
   const cfg = await getConfig();
   if (Date.now() - lastPushAt >= cfg.throttleMs) {
-    await pushAll(reason);
+    await pushAll(reason, { checkDiff: true });
   } else {
     dirtySinceThrottle = true;
     // 补偿推送（alarm 实际触发可能晚于设定，由浏览器调度）
@@ -399,15 +522,22 @@ chrome.runtime.onInstalled.addListener(() => {
   pushAll("启动时");
 });
 
-chrome.cookies.onChanged.addListener(() => {
-  pushThrottled("cookie变更");
+chrome.cookies.onChanged.addListener((changeInfo) => {
+  // 范围预判（prompt.md：仅范围内变更才触发）：范围外变更直接忽略，
+  // 连节流标记都不打。推送前的快照 diff 由 pushAll(checkDiff) 负责。
+  if (!changeInfo || !changeInfo.cookie) return;
+  getConfig().then((cfg) => {
+    if (cookieAllowed(changeInfo.cookie, cfg)) {
+      pushThrottled("cookie变更");
+    }
+  });
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === "heartbeat") {
     pushAll("定时推送");
   } else if (alarm.name === "flush" && dirtySinceThrottle) {
-    pushAll("cookie变更(补推)");
+    pushAll("cookie变更(补推)", { checkDiff: true });
   } else if (alarm.name.startsWith("ka_")) {
     // 到点即刷新：周期由 alarm 保证，不计算距上次刷新的时间
     const host = alarm.name.slice(3);

@@ -3,7 +3,8 @@
   "name": "chrome_capture_operate",
   "version": "1.1.0",
   "description": "配合本机 chrome_capture_operate Python 服务使用：自动推送浏览器 Cookie 供固化脚本获取登录态；定时刷新已打开的页面保持登录会话；收藏当前已打开页面并可批量重新打开。",
-  "permissions": ["cookies", "tabs", "storage", "alarms", "scripting"],
+  "permissions": ["cookies", "tabs", "storage", "alarms", "scripting",
+                  "webRequest"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background.js"
