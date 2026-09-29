@@ -1,5 +1,6 @@
 .idea/
 .venv/
+chrome_capture_operate_python/crx
 .claude/
 chrome_capture_operate_python/tests/
 docs/
