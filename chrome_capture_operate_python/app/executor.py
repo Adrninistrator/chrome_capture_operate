@@ -1,4 +1,4 @@
-"""固化脚本执行器。
+"""生成的脚本执行器。
 
 - 使用当前 Python 项目的虚拟环境执行，python -u（输出不被缓存）。
 - 不传递参数；捕获 stdout/stderr。
@@ -103,8 +103,8 @@ class Executor:
     async def _run(self, ex):
         log.info("执行脚本: %s", ex.script_path)
         # 子进程强制 UTF-8 输出，避免 Windows GBK 中文乱码；
-        # 屏蔽 Python 告警（含固化脚本 verify=False 触发的
-        # InsecureRequestWarning 等 HTTPS 相关告警，prompt.md 执行py要求）
+        # 屏蔽 Python 告警（含生成的脚本 verify=False 触发的
+        # InsecureRequestWarning 等 HTTPS 相关告警，prompt 需求 执行py要求）
         env = dict(os.environ, PYTHONIOENCODING="utf-8",
                    PYTHONWARNINGS="ignore")
         try:
@@ -168,6 +168,58 @@ class Executor:
             return False
         await self._kill_proc(ex)
         return True
+
+    async def run_to_completion(self, script_path, timeout=None):
+        """MCP 同步执行语义：等待脚本结束或超时后终止进程（与 Web 的
+        "超时保留进程人工决策"不同，prompt 需求 MCP 执行工具明确要求
+        超时终止）。返回 dict：exit_code/timed_out/stdout/stderr/elapsed_ms
+        /error；路径不合法返回 {"error": ...}。"""
+        p = validate_script_path(script_path)
+        if not p:
+            return {"error": "脚本不存在或不在允许的脚本目录内"}
+        t = int(timeout or self._timeout())
+        started = time.time()
+        env = dict(os.environ, PYTHONIOENCODING="utf-8",
+                   PYTHONWARNINGS="ignore")
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                venv_python(), "-u", p,
+                cwd=os.path.dirname(p), env=env,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+        except Exception as e:
+            return {"error": "启动失败: %s" % e,
+                    "elapsed_ms": int((time.time() - started) * 1000)}
+
+        async def read(stream):
+            chunks = []
+            while True:
+                line = await stream.readline()
+                if not line:
+                    break
+                chunks.append(line.decode("utf-8", "replace"))
+            return "".join(chunks)
+
+        readers = asyncio.gather(read(proc.stdout), read(proc.stderr))
+        timed_out = False
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=t)
+        except asyncio.TimeoutError:
+            timed_out = True
+            log.warning("MCP执行脚本超时(%ds)，终止进程: %s", t, p)
+            proc.kill()
+            await proc.wait()
+        stdout, stderr = await readers
+        return {
+            "script_path": p,
+            "exit_code": proc.returncode,
+            "timed_out": timed_out,
+            "stdout": stdout,
+            "stderr": stderr,
+            "elapsed_ms": int((time.time() - started) * 1000),
+        }
 
     def get(self, exec_id):
         return self.execs.get(exec_id)

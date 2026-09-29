@@ -1,4 +1,6 @@
-"""Chrome 进程管理：注册表查找安装路径、profile 拷贝、启动调试端口实例。"""
+"""Chrome 进程管理：注册表查找安装路径、profile 拷贝、启动调试端口实例、窗口置顶。"""
+import ctypes
+import ctypes.wintypes as _wt
 import json
 import logging
 import os
@@ -6,6 +8,7 @@ import shutil
 import socket
 import subprocess
 import tempfile
+import time
 import urllib.request
 import winreg
 
@@ -197,3 +200,76 @@ def chrome_version(cdp_port):
             return json.loads(r.read().decode("utf-8", "replace"))
     except Exception:
         return None
+
+
+# ---------------- 用于抓包的 Chrome 窗口置顶 ----------------
+# 抓包页与"AI自主操作Chrome"弹窗共用的双态按钮：Chrome 已启动时按钮文字
+# 变为"用于抓包的Chrome进程置顶"（需求），点击将窗口还原（若最小化）并
+# 置顶显示；进程结束后按钮恢复为"启动用于抓包的Chrome"。
+
+_user32 = ctypes.windll.user32
+_SW_RESTORE = 9
+_VK_MENU = 0x12
+_KEYEVENTF_KEYUP = 0x0002
+
+
+def _pid_of_cdp_port(cdp_port):
+    """找监听 CDP 端口的进程 PID（即 Chrome 浏览器主进程，顶层窗口属于它）。
+
+    无监听返回 None。用 PowerShell Get-NetTCPConnection（与项目既有
+    PowerShell 方案同源，不依赖已被移除的 wmic）。"""
+    cmd = ("powershell -NoProfile -Command "
+           "(Get-NetTCPConnection -LocalPort %d -State Listen "
+           "-ErrorAction SilentlyContinue).OwningProcess" % cdp_port)
+    try:
+        r = subprocess.run(cmd, capture_output=True, timeout=20)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        log.warning("查询端口 %d 监听进程失败: %s", cdp_port, e)
+        return None
+    out = r.stdout.decode("utf-8", "replace").replace(",", " ").split()
+    pids = [int(x) for x in out if x.isdigit()]
+    return pids[0] if pids else None
+
+
+def _visible_windows_of_pid(pid):
+    """枚举进程的可见顶层窗口 [(hwnd, 标题)]（EnumWindows 按 z 序，首个
+    即该进程最上层/最近活动的窗口；渲染子进程不拥有顶层窗口）。"""
+    found = []
+
+    def _cb(hwnd, _lparam):
+        wpid = _wt.DWORD()
+        _user32.GetWindowThreadProcessId(hwnd, ctypes.byref(wpid))
+        if wpid.value == pid and _user32.IsWindowVisible(hwnd):
+            n = _user32.GetWindowTextLengthW(hwnd)
+            if n > 0:
+                buf = ctypes.create_unicode_buffer(n + 1)
+                _user32.GetWindowTextW(hwnd, buf, n + 1)
+                found.append((hwnd, buf.value))
+        return True
+
+    proc = ctypes.WINFUNCTYPE(ctypes.c_bool, _wt.HWND, _wt.LPARAM)
+    _user32.EnumWindows(proc(_cb), pid)
+    return found
+
+
+def bring_chrome_to_front(cdp_port):
+    """把用于抓包的 Chrome 窗口还原（若最小化）并置顶显示到屏幕最前。
+
+    返回 (ok, message)。实测要点：Windows 前台锁定会拒绝后台进程抢前台，
+    先按一下 ALT 再 SetForegroundWindow 是经典且有效的解法。"""
+    if not is_cdp_alive(cdp_port, force=True):
+        return False, "用于抓包的Chrome未启动，无法置顶"
+    pid = _pid_of_cdp_port(cdp_port)
+    if not pid:
+        return False, "未找到监听调试端口 %d 的Chrome进程" % cdp_port
+    wins = _visible_windows_of_pid(pid)
+    if not wins:
+        return False, "Chrome 进程（PID %d）没有可见窗口" % pid
+    hwnd, title = wins[0]
+    if _user32.IsIconic(hwnd):
+        _user32.ShowWindow(hwnd, _SW_RESTORE)
+        time.sleep(0.15)
+    _user32.keybd_event(_VK_MENU, 0, 0, 0)
+    _user32.SetForegroundWindow(hwnd)
+    _user32.keybd_event(_VK_MENU, 0, _KEYEVENTF_KEYUP, 0)
+    return True, "用于抓包的Chrome已置顶显示（%s）" % title

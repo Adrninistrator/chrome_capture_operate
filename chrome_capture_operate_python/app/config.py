@@ -5,7 +5,9 @@ conf.json 字段：
 - suffix_filter       URL 后缀过滤清单（静态资源），即时生效
 - content_type_filter 返回 content-type 过滤清单（静态资源），即时生效
 - cdp_port            Chrome CDP 调试端口，默认 9222
-- exec_timeout_sec    固化脚本执行超时（秒），默认 300
+- exec_timeout_sec    生成的脚本执行超时（秒），默认 300
+- op_event_types      DOM 操作监听注入记录的事件类型清单（默认不含
+                      pointerdown/focusin/scroll），对新注入页面即时生效
 
 auto_start（是否开机自启动，默认否）：参数值按需求写入全局配置文件
 global_conf.json（见 app/globalconf.py，与项目目录解耦），注册表 HKCU Run
@@ -33,7 +35,8 @@ SCRIPTS_EXAMPLE_DIR = os.path.join(BASE_DIR, "python_scripts_example")
 # （定时任务本身保存在全局配置文件，见 app/globalconf.py KEY_SCHEDULES）
 SCRIPT_LOG_DIR = os.path.join(LOG_DIR, "scripts")
 API_DOC_PATH = os.path.join(PROJECT_ROOT, "api", "api.md")
-# Chrome 插件目录（页头"安装Chrome插件"按钮复制给用户去加载）
+ANALYSIS_GUIDE_PATH = os.path.join(PROJECT_ROOT, "api", "analysis-guide.md")
+# Chrome 插件目录（页头"安装Chrome插件-人工"按钮复制给用户去加载）
 EXTENSION_DIR = os.path.join(PROJECT_ROOT, "chrome_capture_operate_extension")
 
 DEFAULT_SUFFIX_FILTER = [
@@ -63,6 +66,22 @@ DEFAULT_TYPE_FILTER = [
     "TextTrack", "Manifest", "Prefetch",
 ]
 
+# DOM 操作监听注入可记录的事件类型全集（注入脚本按启用清单注册监听，
+# 未启用的类型在页面内不装监听——无事件开销、无 CDP 回传流量）
+OP_EVENT_TYPES = [
+    "click", "change", "submit", "keydown", "route", "page_load",
+    "pagehide", "contextmenu", "copy", "paste",
+    "pointerdown", "focusin", "scroll",
+]
+# 默认记录清单不含 pointerdown/focusin/scroll——实测抓包样本
+# （captured_record/2026_09_27_20_44_24）中三者占操作行 69%：
+# scroll 纯噪音（连片触发、无信息量）；pointerdown 与 click 100%
+# 配对冗余；focusin 基本与 click 配对。需要时可经参数配置开启。
+DEFAULT_OP_EVENT_TYPES = [
+    t for t in OP_EVENT_TYPES
+    if t not in ("pointerdown", "focusin", "scroll")
+]
+
 DEFAULTS = {
     "port": 33445,
     "suffix_filter": DEFAULT_SUFFIX_FILTER,
@@ -70,6 +89,7 @@ DEFAULTS = {
     "type_filter": DEFAULT_TYPE_FILTER,
     "cdp_port": 9222,
     "exec_timeout_sec": 300,
+    "op_event_types": DEFAULT_OP_EVENT_TYPES,
 }
 
 _RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"

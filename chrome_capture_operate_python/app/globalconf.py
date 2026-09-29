@@ -1,7 +1,7 @@
 """全局配置文件：C:\\Users\\%username%\\.chrome_capture_operate\\global_conf.json
 
 对于需要在当前操作系统全局使用的配置参数（区别于 conf/conf.json 项目级配置），
-写入全局配置文件，如固化脚本保存根目录 python_scripts_dir_path。
+写入全局配置文件，如生成的脚本保存根目录 python_scripts_dir_path。
 
 - 存储 JSON 格式
 - 查询：文件或 key 不存在返回 ""，存在则返回对应值
@@ -25,6 +25,10 @@ KEY_AUTO_START = "auto_start"  # 是否开机自启动（"true"/"false"，config
 KEY_SCHEDULES = "schedules"   # 定时执行任务（结构化，Scheduler 读写）
 KEY_MULTI_PROFILE = "chrome_multi_profile"  # Chrome 多开实例（结构化，webapp 读写）
 KEY_FAVORITE_PAGES = "favorite_pages"  # 收藏的页面记录（结构化，webapp 读写）
+KEY_TRAY_SCRIPTS = "tray_scripts"  # 系统托盘快速执行脚本列表（结构化，webapp 读写）
+KEY_EXTENSION_ID = "extension_id"  # 解压版 Chrome 插件 ID（插件设置页
+# 连接插件用；ID 与加载路径相关，人工从 chrome://extensions 复制配置一次；
+# 注册表安装版 ID 由服务自动识别，无需配置）
 
 _lock = threading.Lock()
 

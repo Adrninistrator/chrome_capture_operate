@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>extension-cmd</title>
+</head>
+<body style="font-family: sans-serif; white-space: pre-wrap; font-size: 13px;">
+<script>
+/* 插件指令命令页（服务内部经 chrome.exe 打开的自动化通道页）。
+ * 用法：/extension-cmd?token=<一次性token>&cmd=<指令>&<字段>=<值>
+ *   cmd=get_config                          读取插件配置
+ *   cmd=set_config&push_scope=list&allow=a.com,b.com&deny=x.com
+ * 页面加载即自动执行（AI 与"Chrome插件设置"页经同一 HTTP 接口触发：
+ * 服务打开本页 → 本页经 externally_connectable 消息通道执行指令 →
+ * 结果 POST 回 /api/extension/cmd_report 唤醒等待的调用方）。
+ * 设计与实测依据：docs/chrome插件网页修改配置/README.md（ext_cmd）。
+ */
+const q = new URLSearchParams(location.search);
+const token = q.get("token") || "";
+const cmd = q.get("cmd") || "";
+const rt = window.chrome && chrome.runtime;
+
+function send(id, msg) {
+  return new Promise(res => {
+    try {
+      rt.sendMessage(id, msg, resp => {
+        const e = chrome.runtime.lastError ? chrome.runtime.lastError.message : null;
+        res({resp, err: e});
+      });
+    } catch (e) { res({resp: null, err: String(e)}); }
+  });
+}
+
+(async () => {
+  const result = {cmd};
+  try {
+    if (!token) throw new Error("缺少 token");
+    if (!rt || !rt.sendMessage) {
+      throw new Error("消息通道不可用（当前浏览器未装 v1.1.4+ 插件，或本页不经 127.0.0.1 访问）");
+    }
+    // 候选扩展 ID：人工配置的解压版 ID + 注册表安装版 ID，逐个尝试
+    let ids = [];
+    try {
+      const r = await fetch("/api/extension/id_candidates");
+      ids = (await r.json()).ids || [];
+    } catch (e) { /* 取不到时按无候选处理 */ }
+    if (!ids.length) {
+      throw new Error("无候选扩展 ID（未配置 extension_id 且注册表未安装）");
+    }
+    let connected = false;
+    for (const id of ids) {
+      if (cmd === "get_config") {
+        const {resp, err} = await send(id, {type: "get_config"});
+        if (resp && resp.ok) {
+          Object.assign(result, {ok: true, ext_id: id, config: resp.config});
+          connected = true; break;
+        }
+        if (resp && resp.ok === false) throw new Error(resp.error);   // 真错误
+        continue;   // resp 为 undefined（该 ID 未装）→ 试下一个
+      }
+      if (cmd === "set_config") {
+        const patch = {};
+        if (q.has("push_scope")) patch.push_scope = q.get("push_scope");
+        if (q.has("allow")) {
+          patch.allow_list = q.get("allow").split(",").map(s => s.trim()).filter(Boolean);
+        }
+        if (q.has("deny")) {
+          patch.deny_list = q.get("deny").split(",").map(s => s.trim()).filter(Boolean);
+        }
+        if (!Object.keys(patch).length) throw new Error("set_config 未提供任何字段");
+        const {resp} = await send(id, {type: "set_config", patch});
+        if (resp && resp.ok) {
+          // 回读验证：get_config 比对提交值（数值字段宽松比较——插件端存数字）
+          const r2 = await send(id, {type: "get_config"});
+          const c = (r2.resp && r2.resp.config) || {};
+          const mismatch = [];
+          for (const k of Object.keys(patch)) {
+            const want = patch[k], got = c[k];
+            const same = Array.isArray(want)
+              ? JSON.stringify(got) === JSON.stringify(want)
+              : String(got) === String(want);
+            if (!same) mismatch.push({field: k, want, got});
+          }
+          Object.assign(result, {ok: true, ext_id: id, applied: resp.applied,
+            read_back_ok: mismatch.length === 0, mismatch, config: c});
+          connected = true; break;
+        }
+        if (resp && resp.ok === false) throw new Error(resp.error);   // 字段/值校验拒绝
+        continue;
+      }
+      throw new Error("未知指令: " + cmd);
+    }
+    if (!connected && !result.error) {
+      throw new Error("全部候选扩展 ID 均未连上（解压版需配置 extension_id，或插件未装在当前浏览器）");
+    }
+  } catch (e) {
+    result.ok = false;
+    result.error = String(e.message || e);
+  }
+  // 结果回传（一次性 token 匹配等待中的服务调用），失败不影响页面展示
+  try {
+    await fetch("/api/extension/cmd_report?token=" + encodeURIComponent(token), {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(result)
+    });
+  } catch (e) { /* 回传失败：服务侧会超时报错 */ }
+  document.title = "extension-cmd:" + (result.ok ? "OK" : "ERROR");
+  document.body.textContent = "extension-cmd 结果：\n"
+      + JSON.stringify(result, null, 2);
+  setTimeout(() => { try { window.close(); } catch (e) {} }, 500);
+})();
+</script>
+</body>
+</html>

@@ -1,6 +1,6 @@
 """定时执行脚本：任务持久化 + 秒级调度循环 + 执行日志。
 
-任务两种触发方式（prompt.md"定时执行脚本"节）：
+任务两种触发方式（prompt 需求"定时执行脚本"节）：
 - at（在指定时间执行）：每天 / 每个星期x / 每个月第x天 + 多个 时:分:秒
 - interval（每隔一段时间执行）：从指定时间开始，每隔 N 秒执行一次；
   可指定允许执行的时间段——全部时间段（默认）或多个 起止 时:分:秒 时间段
@@ -285,7 +285,7 @@ def _fmt_interval(sec):
 class Scheduler:
     """任务存储 + 调度循环。线程安全（读写锁），执行不阻塞 tick。
 
-    任务保存在全局配置文件 global_conf.json 的 schedules key 中（prompt.md
+    任务保存在全局配置文件 global_conf.json 的 schedules key 中（prompt 需求
     "定时执行任务存储位置"），与脚本保存目录等全局参数同文件；conf_key
     可覆盖（测试隔离用）。
     """
@@ -490,7 +490,7 @@ class Scheduler:
         script = task["script_path"]
         log_path = self.log_path(script, datetime.now())
         started = time.time()
-        # prompt.md 执行日志要求：触发定时执行时在主日志中打印
+        # prompt 需求 执行日志要求：触发定时执行时在主日志中打印
         # （任务名/脚本路径/独立日志文件路径）
         log.info("定时任务触发: %s 脚本=%s 日志=%s",
                  task.get("name") or tid, script, log_path)

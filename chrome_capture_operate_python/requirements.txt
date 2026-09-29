@@ -4,3 +4,6 @@ websockets>=12
 pystray>=0.19
 pillow>=10
 requests>=2.31
+mcp>=1.8,<2
+crx3>=0.0.4
+pywinauto>=0.6.9

@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Chrome插件设置 - chrome_capture_operate</title>
+<style>
+* { box-sizing: border-box; }
+body { font-family: "Microsoft YaHei", sans-serif; margin: 0; background: #f4f6f8; color: #222; }
+header.bar { background: #1f3a5f; color: #fff; padding: 10px 20px; }
+header.bar h1 { font-size: 18px; margin: 0; font-weight: 600; }
+.wrap { max-width: 880px; margin: 0 auto; padding: 18px 20px; }
+.card { background: #fff; border: 1px solid #e0e0e0; border-radius: 6px; padding: 14px; margin-bottom: 14px; }
+button.btn { background: #1f3a5f; color: #fff; border: 0; border-radius: 4px; padding: 6px 14px; cursor: pointer; margin-right: 8px; }
+button.btn:disabled { background: #ccd3da; color: #f4f6f8; cursor: default; }
+button.link { background: none; border: 0; color: #1f6fd6; cursor: pointer; padding: 2px 6px; }
+input[type=text], select { padding: 4px 6px; border: 1px solid #ccc; border-radius: 4px; }
+textarea { width: 100%; font-family: Consolas, monospace; font-size: 12px; }
+pre { margin: 0; font-family: Consolas, monospace; font-size: 12px; white-space: pre-wrap; word-break: break-all; }
+.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.muted { color: #888; font-size: 12px; }
+.ok { color: #187a3c; } .bad { color: #b3392e; }
+#log { background: #fbfcfd; border: 1px solid #ddd; border-radius: 4px; padding: 10px; min-height: 120px; max-height: 320px; overflow: auto; font-family: Consolas, monospace; font-size: 12px; }
+#curJson { background: #fbfcfd; border: 1px solid #ddd; border-radius: 4px; padding: 8px; }
+label.ck { display: inline-flex; align-items: center; gap: 4px; margin-right: 12px; font-size: 13px; }
+code { font-family: Consolas, monospace; font-size: 12px; background: #eef1f4; border-radius: 3px; padding: 1px 5px; }
+</style>
+</head>
+<body>
+<header class="bar"><h1>Chrome插件设置（cookie推送范围读取与修改验证）</h1></header>
+<div class="wrap">
+  <div class="card">
+    <b>接口说明与扩展 ID</b>
+    <div class="row" style="margin-top:8px">
+      <span>接口：</span><code>GET / POST /api/extension/config</code>
+      <span class="muted">（本页与 AI 使用<b>同一个 HTTP 接口</b>，AI 调用同一接口可验证本页的操作）</span>
+    </div>
+    <div class="row" style="margin-top:6px">
+      <span>最近命中的扩展 ID：</span><code id="curExtId">（未确定）</code>
+      <button class="link" id="btnRedetect" title="重新调用读取接口（与 AI 调用的同一接口）">重新读取</button>
+    </div>
+    <div class="row" style="margin-top:6px">
+      <input type="text" id="extIdInput" placeholder="32位扩展ID（chrome://extensions 插件卡片 ID 行复制）" style="width:380px;font-family:Consolas,monospace" title="解压版插件的扩展 ID（注册表安装版会自动识别，无需填写）；从 chrome://extensions 页面插件卡片的 ID 一行复制">
+      <button class="btn" id="btnSaveExtId" title="保存扩展 ID 到全局配置文件并重新读取（解压版插件首次使用需配置一次）">保存并读取</button>
+    </div>
+    <div class="muted" style="margin-top:6px">接口执行方式：服务在<b>日常 Chrome</b>新标签页打开命令页（自动执行并回传结果，页面会尝试自关但通常被 Chrome 拦截，可定期手工清理残留标签）→ 命令页经插件消息通道 get_config / set_config 完成读取、修改与回读验证。需插件 v1.1.4+；解压版插件首次使用需在上方配置一次插件 ID，注册表安装版自动识别。</div>
+  </div>
+  <div class="card">
+    <b>cookie推送范围设置</b> <span class="muted">（push_scope/allow_list/deny_list，修改由插件侧白名单与校验兜底）</span>
+    <div class="row" style="margin-top:8px">
+      <label class="ck">push_scope
+        <select id="fScope" title="Cookie/Authorization 推送范围：none=全部禁止；list=按清单；all=全部允许">
+          <option value="none">none（全部禁止）</option>
+          <option value="list">list（按清单推送）</option>
+          <option value="all">all（全部允许）</option>
+        </select></label>
+    </div>
+    <div style="margin-top:8px"><b style="font-size:13px">allow_list（每行一个域名/IP，支持 *. 通配符）</b></div>
+    <textarea id="fAllow" rows="3" title="push_scope=list 时的允许推送清单（域名或IP，支持 *.example.com 通配）"></textarea>
+    <div style="margin-top:8px"><b style="font-size:13px">deny_list（每行一个域名/IP，不允许优先）</b></div>
+    <textarea id="fDeny" rows="3" title="push_scope=list 时的不允许清单，命中的域名不推送（不允许优先）"></textarea>
+    <div class="row" style="margin-top:10px">
+      <button class="btn" id="btnRead" title="调用 GET /api/extension/config 读取插件当前生效的推送范围（与 AI 调用的同一接口）">读取配置</button>
+      <button class="btn" id="btnApply" disabled title="调用 POST /api/extension/config 修改推送范围，接口自动回读验证是否真实生效（与 AI 调用的同一接口）">修改并回读验证</button>
+    </div>
+    <div style="margin-top:10px"><b style="font-size:13px">当前生效配置（接口返回）</b></div>
+    <pre id="curJson" class="muted">（未读取）</pre>
+  </div>
+  <div class="card">
+    <b>执行日志</b>
+    <div id="log" style="margin-top:8px"></div>
+  </div>
+</div>
+<script>
+const $ = s => document.querySelector(s);
+
+async function api(path, opt) {
+  const r = await fetch(path, opt ? {headers: {'Content-Type': 'application/json'}, ...opt} : undefined);
+  return r.json();
+}
+function log(msg, cls) {
+  const box = $('#log');
+  const div = document.createElement('div');
+  if (cls) div.className = cls;
+  div.textContent = '[' + new Date().toTimeString().slice(0, 8) + '] ' + msg;
+  box.appendChild(div);
+  box.scrollTop = box.scrollHeight;
+}
+function renderConfig(c) {
+  $('#fScope').value = c.push_scope || 'none';
+  $('#fAllow').value = (c.allow_list || []).join('\n');
+  $('#fDeny').value = (c.deny_list || []).join('\n');
+  $('#curJson').textContent = JSON.stringify(c, null, 2);
+  $('#curJson').classList.remove('muted');
+}
+
+async function readConfig() {
+  $('#btnRead').disabled = true;
+  try {
+    log('GET /api/extension/config（与 AI 同一接口；服务将打开命令页并等待回传，约 2~5 秒）…');
+    const r = await api('/api/extension/config');
+    if (!r.ok) {
+      log('✗ 读取失败: ' + (r.error || JSON.stringify(r)), 'bad');
+      if (/通道不可用|未装/.test(r.error || '')) {
+        log('提示：当前浏览器可能未安装 chrome_capture_operate 插件（v1.1.4+），请先经页头"安装Chrome插件-人工"或"安装Chrome插件-自动"安装', 'bad');
+      } else if (/候选|未连上/.test(r.error || '')) {
+        log('提示：解压版插件请在上方"扩展 ID"中粘贴插件 ID 后点"保存并读取"', 'bad');
+      }
+      return;
+    }
+    if (r.ext_id) {
+      $('#curExtId').textContent = r.ext_id;
+      $('#extIdInput').value = r.ext_id;
+    }
+    renderConfig(r.config);
+    $('#btnApply').disabled = false;
+    log('✓ 读取成功（扩展 ' + (r.ext_id || '?') + '）: ' + JSON.stringify(r.config), 'ok');
+  } finally {
+    $('#btnRead').disabled = false;
+  }
+}
+
+$('#btnApply').onclick = async () => {
+  const scope = $('#fScope').value;
+  if (scope === 'list'
+      && !$('#fAllow').value.split('\n').map(s => s.trim()).filter(Boolean).length) {
+    log('✗ push_scope=list 时 allow_list 不能为空（请至少填写一个域名/IP，或改用 none/all）', 'bad');
+    return;
+  }
+  const body = {
+    push_scope: scope,
+    allow_list: $('#fAllow').value.split('\n').map(s => s.trim()).filter(Boolean),
+    deny_list: $('#fDeny').value.split('\n').map(s => s.trim()).filter(Boolean),
+  };
+  log('POST /api/extension/config（与 AI 同一接口；服务将打开命令页执行修改并回读验证）: ' + JSON.stringify(body));
+  $('#btnApply').disabled = true;
+  try {
+    const r = await api('/api/extension/config', {method: 'POST',
+      body: JSON.stringify(body)});
+    if (!r.ok) {
+      log('✗ 修改失败: ' + (r.error || JSON.stringify(r)), 'bad');
+      return;
+    }
+    log('✓ 接口已应用字段: ' + JSON.stringify(r.applied), 'ok');
+    if (r.ext_id) {
+      $('#curExtId').textContent = r.ext_id;
+      $('#extIdInput').value = r.ext_id;
+    }
+    if (r.config) renderConfig(r.config);
+    log(r.read_back_ok
+      ? '✓ 回读一致——修改已真实生效（AI 可调用同一 GET 接口验证）'
+      : '✗ 回读不一致: ' + JSON.stringify(r.mismatch),
+      r.read_back_ok ? 'ok' : 'bad');
+  } finally {
+    $('#btnApply').disabled = false;
+  }
+};
+
+$('#btnRedetect').onclick = readConfig;
+$('#btnRead').onclick = readConfig;
+
+$('#btnSaveExtId').onclick = async () => {
+  const v = $('#extIdInput').value.trim();
+  if (!/^[a-p]{32}$/.test(v)) {
+    log('✗ 扩展 ID 应为 32 位 a-p 字符（chrome://extensions 插件卡片"ID："一行复制）', 'bad');
+    return;
+  }
+  const r = await api('/api/global_conf', {method: 'PUT',
+    body: JSON.stringify({key: 'extension_id', value: v})});
+  if (r.error) { log('✗ 保存失败: ' + r.error, 'bad'); return; }
+  log('✓ 扩展 ID 已保存到全局配置文件，重新读取…', 'ok');
+  readConfig();
+};
+
+readConfig();
+</script>
+</body>
+</html>

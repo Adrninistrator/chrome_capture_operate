@@ -12,9 +12,14 @@ header h1 { font-size: 18px; margin: 0; }
 header button { background: rgba(255,255,255,.15); color: #fff; border: 1px solid rgba(255,255,255,.4);
   border-radius: 4px; padding: 4px 12px; cursor: pointer; font-size: 12px; }
 header button:hover { background: rgba(255,255,255,.28); }
+header button.primary { background: #fff; color: #1f3a5f; font-weight: 600; border-color: #fff; }
+header button.primary:hover { background: #e8edf3; }
 nav { background: #fff; border-bottom: 1px solid #ddd; padding: 0 12px; display: flex; }
 nav button { border: 0; background: none; padding: 12px 18px; cursor: pointer; font-size: 14px; border-bottom: 2px solid transparent; }
 nav button.active { border-bottom-color: #1f3a5f; color: #1f3a5f; font-weight: 600; }
+.tabs { display: flex; border-bottom: 1px solid #ddd; margin: 6px 0 10px; }
+.tabs .tab-btn { border: 0; background: none; padding: 8px 18px; cursor: pointer; font-size: 14px; border-bottom: 2px solid transparent; }
+.tabs .tab-btn.active { border-bottom-color: #1f3a5f; color: #1f3a5f; font-weight: 600; }
 .tab { display: none; padding: 16px 20px; }
 .tab.active { display: block; }
 .card { background: #fff; border: 1px solid #e0e0e0; border-radius: 6px; padding: 14px; margin-bottom: 14px; }
@@ -23,6 +28,8 @@ button.btn.warn { background: #b3392e; }
 button.btn:disabled, button.btn.warn:disabled { background: #ccd3da; color: #f4f6f8; cursor: default; box-shadow: none; }
 button.link { background: none; border: 0; color: #1f6fd6; cursor: pointer; padding: 2px 6px; }
 button.link:disabled { color: #b3bcc5; cursor: default; }
+button.link.dim { color: #98a2ad; font-size: 12px; }
+button.link.dim:hover { color: #1f6fd6; }
 table { border-collapse: collapse; width: 100%; font-size: 13px; }
 th, td { border: 1px solid #e3e6ea; padding: 5px 8px; text-align: left; }
 th { background: #f0f3f6; }
@@ -34,6 +41,10 @@ td.url { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-spac
 .split { display: flex; gap: 14px; }
 .split > .left { width: 320px; flex: none; }
 .split > .right { flex: 1; min-width: 0; }
+/* MCP 服务说明页：占满视口剩余高度（工具列表与详情内部滚动） */
+#tab-mcp.active { display: flex; flex-direction: column; height: calc(100vh - 108px); }
+#tab-mcp > .card { flex: 1; display: flex; flex-direction: column; min-height: 0; margin-bottom: 0; }
+#tab-mcp .split { flex: 1; min-height: 0; }
 .list { border: 1px solid #e0e0e0; border-radius: 4px; max-height: 420px; overflow: auto; background: #fff; }
 .list .item { padding: 6px 10px; cursor: pointer; border-bottom: 1px solid #f0f0f0; font-size: 13px; }
 .list .item:hover { background: #f0f6ff; }
@@ -113,6 +124,8 @@ pre .md-link { color: #1f6fd6; text-decoration: underline; }
 .md-body th, .md-body td { border: 1px solid #d8dde3; padding: 6px 10px; text-align: left; }
 .md-body th { background: #f0f3f6; }
 .md-body blockquote { border-left: 4px solid #1f6fd6; margin: 8px 0; padding: 4px 12px; background: #f7faff; color: #444; }
+/* 使用说明章正文中的超链接（README 工具获取章下载地址等），新标签页打开 */
+.md-body a { color: #1f6fd6; text-decoration: underline; word-break: break-all; }
 /* 使用说明页：侧边目录 + 锚点跳转 */
 .usage-split { display: flex; gap: 16px; align-items: flex-start; }
 .usage-toc { display: block; width: 230px; flex: none; position: sticky; top: 10px; max-height: calc(100vh - 30px);
@@ -127,13 +140,25 @@ pre .md-link { color: #1f6fd6; text-decoration: underline; }
 .usage-toc a.lv4 { padding-left: 44px; }
 .md-body h1, .md-body h2, .md-body h3, .md-body h4 { scroll-margin-top: 12px; }
 @media (max-width: 900px) { .usage-split { display: block; } .usage-toc { display: none; } }
+/* "AI自主操作Chrome"弹窗 b. AI Agent MCP配置：两种情况上下分别用框包围展示 */
+.cfg-box { border: 1px solid #d8dde3; border-radius: 6px; padding: 10px 14px; margin: 8px 0; background: #fbfcfd; }
+.cfg-box .cfg-title { font-weight: 600; color: #1f3a5f; margin: 2px 0 6px; font-size: 14px; }
+/* 抓包Chrome已启动时，启动/置顶双态按钮的置顶态背景（绿色，进程结束后
+   摘除 class 即恢复默认深蓝；禁用态沿用统一灰底） */
+button.btn.chrome-top { background: #187a3c; }
+button.btn.chrome-top:disabled { background: #ccd3da; color: #f4f6f8; cursor: default; box-shadow: none; }
 </style>
 </head>
 <body>
 <header>
   <h1>chrome_capture_operate</h1>
   <span id="status">加载中…</span>
-  <button id="btnInstallExt" style="margin-left:auto" title="打开安装说明：展示Chrome插件管理页面地址与插件目录（均可复制），并说明人工安装步骤">安装Chrome插件</button>
+  <button id="btnAiOps" style="margin-left:auto" title="打开AI自主操作Chrome页面：依赖环境准备、AI Agent MCP配置说明与提示词模板（打开时自动复制）">AI自主操作Chrome</button>
+  <button id="btnManualOps" title="人工在Chrome执行操作后由AI生成脚本：查看完整操作步骤">人工操作后AI生成脚本</button>
+  <button id="btnRunScript" title="查看执行生成的脚本的前提与执行方式说明">执行生成的脚本</button>
+  <button id="btnInstallExtManual" class="primary" title="打开人工安装说明：展示Chrome插件管理页面地址与插件目录（均可复制），并说明人工安装步骤">安装Chrome插件-人工</button>
+  <button id="btnInstallExtAuto" class="primary" title="打开自动安装说明：模拟点击安装（推荐）或通过注册表安装，含执行进度">安装Chrome插件-自动</button>
+  <button id="btnExtSettingsTop" title="打开Chrome插件自身的设置页面（插件安装后打开的那个页面，新标签页）；插件未安装时给出提示">Chrome插件设置</button>
 </header>
 <nav>
   <button data-tab="capture" class="active" title="切换到抓包页面">抓包</button>
@@ -141,7 +166,8 @@ pre .md-link { color: #1f6fd6; text-decoration: underline; }
   <button data-tab="exec" title="切换到快速执行脚本页面">快速执行脚本</button>
   <button data-tab="sched" title="切换到定时执行脚本页面">定时执行脚本</button>
   <button data-tab="settings" title="切换到参数配置页面">参数配置</button>
-  <button data-tab="cookies" title="切换到Chrome Cookie接收状态页面">Chrome Cookie接收状态</button>
+  <button data-tab="mcp" title="切换到MCP服务说明页面">MCP服务说明</button>
+  <button data-tab="cookies" title="切换到Chrome Cookie接收与查询记录页面">Chrome Cookie接收与查询记录</button>
   <button data-tab="multi" title="切换到Chrome进程多开页面">Chrome进程多开</button>
   <button data-tab="usage" title="切换到使用说明页面">使用说明</button>
 </nav>
@@ -149,18 +175,18 @@ pre .md-link { color: #1f6fd6; text-decoration: underline; }
 <!-- ============ 抓包 ============ -->
 <div class="tab active" id="tab-capture">
   <div class="card row">
-    <button class="btn" id="btnChrome" title="查找Chrome安装目录并启动带CDP调试端口的独立实例，用于抓包（已启动则不重复启动）">启动用于抓包的Chrome</button>
+    <button class="btn chromeStartBtn" id="btnChrome" title="查找Chrome安装目录并启动带CDP调试端口的独立实例，用于抓包（已启动则不重复启动）">启动用于抓包的Chrome</button>
     <button class="btn" id="btnCheckChrome" title="立即检测抓包Chrome进程与CDP连接状态（状态变化自动推送，轮询兜底每30秒一次）">检测Chrome进程</button>
-    <span id="chromeState" class="badge">未检测</span>
+    <span id="chromeState" class="badge chromeState">未检测</span>
     <button class="btn" id="btnStart" disabled title="开始保存抓包Chrome的网络访问数据到文件（需先启动用于抓包的Chrome）">开始抓包</button>
     <button class="btn" id="btnPauseResume" disabled title="暂停当前抓包（记录保留，之后可继续）">暂停抓包</button>
     <button class="btn warn" id="btnEnd" disabled title="结束本次抓包并清空页面显示的抓包记录（Chrome进程保留）">结束抓包</button>
-    <button class="btn" id="btnPurge" disabled title="按当前抓包配置删除不满足条件的记录（页面与文件同步删除，序号不变）">删除不满足条件的记录</button>
+    <button class="btn" id="btnPurge" disabled title="按当前抓包配置删除被过滤的记录（静态资源等），其余记录保留；页面与文件同步删除，序号不变">删除被过滤的记录</button>
     <button class="btn" id="btnMark" disabled title="需要提供给AI使用的抓包记录可以点击人工标记">人工标记本次抓包</button>
     <button class="btn" id="btnSearchCap" disabled title="在当前抓包的请求/返回头与body中搜索关键字">搜索内容</button>
     <span id="capState" class="muted"></span>
     <span class="muted">（状态变化自动推送；每30秒兜底轮询）</span>
-    <span id="chromeHint" style="display:none;flex-basis:100%;color:#b3392e;font-size:13px">
+    <span id="chromeHint" class="chromeHint" style="display:none;flex-basis:100%;color:#b3392e;font-size:13px">
       请在<b>新启动的用于抓包的Chrome浏览器窗口</b>中进行操作，不要在日常使用的Chrome浏览器中操作
     </span>
   </div>
@@ -168,6 +194,8 @@ pre .md-link { color: #1f6fd6; text-decoration: underline; }
     <b>抓包配置</b> <span class="muted">（会话级，抓包中调整对后续数据即时生效；以下配置参数的具体值可在参数配置页面进行设置）</span>
     <div class="split" style="margin-top:8px">
       <div style="width:280px;flex:none">
+        <label class="ck" title="抓包期间向页面注入 DOM 事件监听，自动记录你在页面上的操作（点击了哪个按钮、输入了什么值、勾选了什么选项），与网络请求毫秒级对齐保存，AI 分析时不需要靠时间戳猜测哪个请求对应哪次操作。你做的每一步（点击、输入值、勾选、提交）都会自动记录在抓包数据中，AI 分析时直接看到操作序列与参数值。开始抓包时生效。">
+          <input type="checkbox" id="ckOpsInject" checked> 记录前端页面操作</label>
         <label class="ck"><input type="checkbox" id="ckType" checked> 根据Chrome请求类型过滤（静态资源）</label>
         <label class="ck"><input type="checkbox" id="ckSuffix" checked> 根据URL后缀过滤静态资源</label>
         <label class="ck"><input type="checkbox" id="ckCt" checked> 根据返回content-type过滤静态资源</label>
@@ -198,9 +226,10 @@ pre .md-link { color: #1f6fd6; text-decoration: underline; }
             <button class="link" id="hostsAll" title="勾选列表中的全部网址">全选</button>
             <button class="link" id="hostsNone" title="取消勾选列表中的全部网址">取消全选</button>
           </span>
+            <button class="link" id="hostsClear" title="清除累计访问过的网址记录：清除后会变成全部网址都抓包，“全选（不过滤）”会钩选；新访问的网址会继续收集">清除记录</button>
         </div>
         <div class="list" id="hostList"></div>
-        <div class="muted">展示监听调试端口的浏览器启动后实际访问过的网址（仅 http/https）</div>
+        <div class="muted">展示监听调试端口的浏览器自服务启动以来累计访问过的网址（跨抓包会话累积，仅 http/https；新抓包会话不清空，便于继续选择此前访问过的网址）</div>
       </div>
     </div>
   </div>
@@ -224,10 +253,10 @@ pre .md-link { color: #1f6fd6; text-decoration: underline; }
     <div class="right">
       <div class="row">
         <b id="sessTitle">文件列表</b>
-        <button class="link" id="btnViewIndex" disabled title="查看当前子目录的index.md汇总文件">查看index.md</button>
-        <button class="btn" id="btnPrompt" disabled title="生成提供给AI的固化脚本提示词（可在弹窗中编辑后复制）">获得生成固化脚本提示词</button>
+        <button class="link" id="btnViewIndex" disabled title="查看当前子目录的index.md汇总文件（含请求与操作注释统一时间线）">查看汇总</button>
+        <button class="btn" id="btnPrompt" disabled title="生成提供给AI的脚本提示词模板（可在弹窗中编辑后复制）">生成脚本提示词模板</button>
         <button class="btn" id="btnSearchHist" disabled title="在当前子目录的请求/返回头与body中搜索关键字">搜索内容</button>
-        <button class="btn warn" id="btnPurgeHist" disabled title="按过滤条件删除当前子目录中不满足条件的记录（可预览删除效果）">删除不满足条件的记录</button>
+        <button class="btn warn" id="btnPurgeHist" disabled title="按过滤条件删除当前子目录中被命中的记录，其余保留；可先预览删除效果">删除被过滤的记录</button>
         <button class="btn" id="btnRename" disabled title="重命名当前选中的子目录（正在抓包中的不允许）">重命名</button>
         <button class="btn" id="btnMarkSess" disabled title="人工标记/取消标记当前选中的子目录（只能对已结束的抓包操作）">人工标记</button>
         <button class="btn warn" id="btnDelSess" disabled title="删除当前选中的子目录（正在抓包中的不允许，删除后不可恢复）">删除该目录</button>
@@ -250,19 +279,20 @@ pre .md-link { color: #1f6fd6; text-decoration: underline; }
 <!-- ============ 快速执行 ============ -->
 <div class="tab" id="tab-exec">
   <div class="card">
-    <b>配置固化脚本保存目录</b> <span class="muted">（保存到全局配置文件 global_conf.json，当前操作系统全局生效）</span>
+    <b>配置生成的脚本保存目录</b> <span class="muted">（保存到全局配置文件 global_conf.json，当前操作系统全局生效）</span>
     <div class="row" style="margin-top:8px">
       <input type="text" id="cfgScriptsDir" style="width:420px" placeholder="例如 E:\git-dir\my-frozen-scripts">
-      <button class="btn" id="btnSaveScriptsDir" title="保存固化Python脚本文件根目录到全局配置文件（需为存在的合法目录路径）">保存</button>
+      <button class="btn" id="btnSaveScriptsDir" title="保存生成的Python脚本文件根目录到全局配置文件（需为存在的合法目录路径）">保存</button>
       <span id="scriptsDirMsg" class="muted"></span>
     </div>
-    <div class="muted" style="margin-top:6px">指定的目录为保存生成的固化Python脚本文件根目录，建议使用为Git项目目录，以便于版本管理与共享。未配置时"获得生成固化脚本提示词"会提示先在此配置。</div>
+    <div class="muted" style="margin-top:6px">指定的目录为保存生成的Python脚本文件根目录，建议使用为Git项目目录，以便于版本管理与共享。未配置时"生成脚本提示词模板"会提示先在此配置。</div>
   </div>
   <div class="split">
-    <div class="left">
-      <div class="row"><b>脚本目录</b><button class="btn" onclick="loadScripts()" title="重新加载脚本子目录列表">刷新</button><button class="btn warn" id="btnDelScriptDir" disabled title="删除当前选中的脚本子目录（删除后不可恢复）">删除子目录</button></div>
+    <div class="left" id="execLeft">
+      <div class="row"><b>脚本目录</b><button class="btn" onclick="loadScripts()" title="重新加载脚本子目录列表">刷新</button><button class="btn warn" id="btnDelScriptDir" disabled title="删除当前选中的脚本子目录（删除后不可恢复）">删除子目录</button><button class="btn ghost" id="btnTrayList" title="查看哪些脚本被添加到了系统托盘快速执行脚本菜单">系统托盘快速执行脚本菜单</button></div>
       <div class="list" id="scriptDirs" style="margin-top:8px"></div>
     </div>
+    <div class="vdrag" id="execDrag" title="按住左右拖动调整脚本目录区域宽度"></div>
     <div class="right">
       <b>脚本文件</b> <span id="pyHint" class="muted"></span>
       <div class="list" id="pyList" style="margin:8px 0; max-height:180px"></div>
@@ -296,34 +326,80 @@ pre .md-link { color: #1f6fd6; text-decoration: underline; }
 <div class="tab" id="tab-settings">
   <div class="card">
     <b>参数配置</b> <span class="muted">（保存到 conf/conf.json）</span>
-    <table style="margin-top:10px; max-width:860px">
+    <table style="margin-top:10px; width:100%">
       <tr><th style="width:200px">监听端口</th><td>
         <input type="number" id="cfgPort" style="width:110px">
         <div class="muted">同端口提供 HTTP / WebSocket（URI 区分）。修改后需<b>重新启动 Python 脚本</b>生效；并需<b>同步修改 Chrome 插件 chrome_capture_operate_extension 中的推送目标地址</b>。</div>
       </td></tr>
       <tr><th>是否自动启动</th><td><label class="ck"><input type="checkbox" id="cfgAuto"> 开机自启动（注册表实现）</label></td></tr>
+      <tr><th>前端操作记录事件类型</th><td>
+        <div id="cfgOpTypes" style="line-height:2;max-width:640px"></div>
+        <div class="muted">抓包开启"记录前端页面操作"时，注入的页面监听并记录以上前端事件；未勾选的类型不装监听、不产生记录。默认不勾选<b>按下/聚焦/滚动</b>——前两者与点击重复、滚动为纯噪音（实测样本中占操作记录约七成）。修改保存后对新注入的页面即时生效，已注入页面在刷新后生效</div>
+      </td></tr>
       <tr><th>Chrome请求类型过滤清单</th><td><textarea id="cfgTypeFilter" rows="5"></textarea><div class="muted">每行一个类型，如 Stylesheet；常见值：Document(网页加载)/XHR/Fetch/Stylesheet/Script/Image/Font/Media/TextTrack/Manifest/Prefetch/EventSource/Ping/Other。默认仅含静态资源，<b>不要把 Document/XHR/Fetch 加进去</b>（会滤掉网页与接口）；Other 与 EventSource 也不建议加入（Other 含各类杂项请求，EventSource 为 SSE 流式数据，可能承载业务数据如 AI 对话）；修改后即时生效</div></td></tr>
       <tr><th>URL后缀过滤清单</th><td><textarea id="cfgSuffix" rows="5"></textarea><div class="muted">每行一个后缀，如 .js；修改后即时生效</div></td></tr>
       <tr><th>content-type过滤清单</th><td><textarea id="cfgCt" rows="5"></textarea><div class="muted">每行一项，如 image/；修改后即时生效</div></td></tr>
       <tr><th>Chrome CDP调试端口</th><td><input type="number" id="cfgCdp" style="width:110px"> <span class="muted">默认 9222，重启生效</span></td></tr>
-      <tr><th>固化脚本执行超时(秒)</th><td><input type="number" id="cfgTimeout" style="width:110px"> <span class="muted">默认 300</span></td></tr>
+      <tr><th>生成的脚本执行超时(秒)</th><td><input type="number" id="cfgTimeout" style="width:110px"> <span class="muted">默认 300</span></td></tr>
     </table>
     <div style="margin-top:10px"><button class="btn" onclick="saveConf()" title="保存参数到conf/conf.json（端口修改需重启Python脚本生效）">保存</button><span id="confMsg" class="muted"></span></div>
   </div>
 </div>
 
-<!-- ============ Cookie 接收状态 ============ -->
+<!-- ============ MCP 工具说明 ============ -->
+<div class="tab" id="tab-mcp">
+  <div class="card">
+    <div class="row">
+      <b>MCP 服务</b>
+      <button class="btn" onclick="loadMcpTools()" title="重新加载MCP工具清单">刷新</button>
+    </div>
+    <div class="row" style="margin:8px 0;align-items:center">
+      <span class="muted">SSE 协议访问URL（AI 客户端配置 MCP 服务时使用）：</span>
+      <input type="text" id="mcpSseUrl" readonly style="width:280px;font-family:Consolas,monospace"
+             onclick="this.select()" title="MCP服务的SSE协议访问URL，点击全选，或用复制按钮">
+      <button class="btn ghost" onclick="copyText(document.getElementById('mcpSseUrl').value)" title="复制MCP服务的SSE协议访问URL，用于配置AI客户端的MCP服务">复制</button>
+    </div>
+    <div class="muted" style="margin:8px 0 2px">当前工具的MCP服务名称需要为 chrome-operate，在 Claude Code 中全局安装当前MCP服务的命令如下：</div>
+    <div class="row" style="margin:2px 0 8px;align-items:center">
+      <input type="text" id="mcpInstallCmd" readonly style="flex:1;min-width:420px;font-family:Consolas,monospace"
+             onclick="this.select()" title="在 Claude Code 中全局安装当前MCP服务的命令，点击全选，或用复制按钮">
+      <button class="btn ghost" onclick="copyText(document.getElementById('mcpInstallCmd').value)" title="复制在 Claude Code 中全局安装当前MCP服务的命令">复制</button>
+    </div>
+    <div class="muted" style="margin-bottom:8px">当前服务通过 SSE 协议提供以下 MCP 工具，点击查看详细说明及参数：</div>
+    <div class="split" style="min-height:200px">
+      <div style="width:360px;flex:none;overflow:auto">
+        <ul id="mcpToolList" style="list-style:none;padding:0;margin:0"></ul>
+      </div>
+      <div style="flex:1;overflow:auto" id="mcpToolDetail" class="muted">（选择左侧工具查看详情）</div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ Cookie 接收与查询记录 ============ -->
 <div class="tab" id="tab-cookies">
   <div class="card">
     <div class="row">
-      <b>Chrome Cookie 接收状态</b>
-      <button class="btn" onclick="loadReceives()" title="重新加载最近50次Cookie接收记录">刷新</button>
+      <b>Chrome Cookie 接收与查询记录</b>
+      <button class="btn" onclick="refreshCookieRecords()" title="重新加载当前展示的接收或查询记录">刷新</button>
       <span id="cookieSummary" class="muted"></span>
     </div>
-    <table id="recvTable" style="margin-top:10px">
-      <thead><tr><th>时间</th><th>实例编号</th><th>原因</th><th>地址</th><th>数量</th><th>成功/失败</th><th>操作</th></tr></thead>
-      <tbody></tbody>
-    </table>
+    <div class="tabs" style="margin:10px 0 0">
+      <button class="tab-btn active" id="ckRecvTab" onclick="showCookieRecords('recv')" title="展示最近50次Chrome插件推送Cookie的接收记录（内存中；完整记录见log目录按天生成的日志文件）">接收记录</button>
+      <button class="tab-btn" id="ckQueryTab" onclick="showCookieRecords('query')" title="展示当天最新50条Cookie查询记录（从日志文件读取，服务重启不丢；完整记录见log目录的cookie_query.log，每天滚动）">查询记录</button>
+    </div>
+    <div id="ckRecvWrap">
+      <table id="recvTable" style="margin-top:10px">
+        <thead><tr><th>时间</th><th>实例编号</th><th>原因</th><th>地址</th><th>数量</th><th>成功/失败</th><th>操作</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div id="ckQueryWrap" style="display:none">
+      <table id="cqTable" style="margin-top:10px">
+        <thead><tr><th>时间</th><th>来源</th><th>查询地址</th><th>范围</th><th>数量</th><th>Authorization</th><th>成功/失败</th><th>操作</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="muted" id="ckLogNote" style="margin-top:6px"></div>
   </div>
 </div>
 
@@ -398,17 +474,18 @@ function copyText(t, silent) {
     .catch(() => { const ta = document.createElement('textarea'); ta.value = t; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); if (!silent) toastMsg('已复制到剪贴板', 'ok'); });
 }
 
-// 页头"安装Chrome插件"：打开安装说明弹窗——展示插件管理页面地址与插件
-// 目录（各带复制按钮）+ 人工安装步骤。自动打开 chrome:// 的方案均不可行
-// （前端 href/window.open 被 Chromium 安全策略拦截；webbrowser.open 走
-// os.startfile 弹"选择打开方式"；chrome.exe 直启时页面转交不可靠），
-// 改为信息展示 + 复制 + 人工步骤引导，详见 docs/design-chrome-extensions-open.md
-$('#btnInstallExt').onclick = async () => {
+// 页头"安装Chrome插件-人工"：打开人工安装说明弹窗——展示插件管理页面
+// 地址与插件目录（各带复制按钮）+ 人工安装步骤。自动打开 chrome:// 的
+// 方案均不可行（前端 href/window.open 被 Chromium 安全策略拦截；
+// webbrowser.open 走 os.startfile 弹"选择打开方式"；chrome.exe 直启时
+// 页面转交不可靠），改为信息展示 + 复制 + 人工步骤引导，
+// 详见 docs/design-chrome-extensions-open.md
+$('#btnInstallExtManual').onclick = async () => {
   const r = await api('/api/extension-dir');
   if (r.error) { toastMsg('获取插件目录失败：' + r.error, 'err', 5000); return; }
-  $('#popTitle').textContent = '安装Chrome插件';
+  $('#popTitle').textContent = '安装Chrome插件-人工';
   $('#popBody').innerHTML =
-    '<div style="max-width:680px;font-size:13px;line-height:1.9">' +
+    '<div style="flex:1;min-height:0;overflow:auto;font-size:13px;line-height:1.9">' +
     '<h3 style="margin:4px 0">需要用到的信息</h3>' +
     '<table><tr><th style="width:150px">Chrome插件管理页面</th><td>' +
       '<code>chrome://extensions</code></td>' +
@@ -423,12 +500,341 @@ $('#btnInstallExt').onclick = async () => {
     '<li>复制上方的<b>Chrome插件目录</b>路径，粘贴到弹出的文件夹选择框（或直接定位到该目录），点击选择文件夹' +
     '<li>插件列表出现 <b>chrome_capture_operate</b> 即安装成功；点击 Chrome 右上角"扩展程序"按钮可打开插件页面进行配置' +
     '</ol>' +
-    '<div class="muted">说明：Chrome 出于安全限制不允许网页直接打开 chrome:// 页面，以上地址需复制后手动在地址栏打开。</div>' +
+    '<div class="muted">说明：Chrome 出于安全限制不允许网页直接打开 chrome:// 页面，以上地址需复制后手动在地址栏打开。需要自动安装（注册表安装或模拟点击安装）时，使用页头"安装Chrome插件-自动"按钮。</div>' +
     '</div>';
   $('#cpExtUrl').onclick = () => copyText('chrome://extensions');
   $('#cpExtDir').onclick = () => copyText(r.path);
   $('#overlay').style.display = 'block';
 };
+
+// 页头"安装Chrome插件-自动"：打开自动安装说明弹窗——注册表安装/卸载 +
+// 模拟点击安装 + 执行进度日志。注册表安装写入策略后自动操作
+// Chrome 在 chrome://policy 点"重新加载政策"，使扩展立即自动安装。
+// 右上角提供不显眼的"插件设置"按钮（新标签页打开设置页：程序调用
+// 读取/修改并回读验证插件配置）
+function showAutoInstallPopup() {
+  $('#popTitle').textContent = '安装Chrome插件-自动';
+  $('#popBody').innerHTML =
+    '<div style="display:flex;flex-direction:column;flex:1;min-height:0;overflow:auto;font-size:13px;line-height:1.9">' +
+    '<div style="display:flex;justify-content:flex-end;flex:none">' +
+    '<button class="link dim" id="btnExtSettings" title="打开Chrome插件设置页（新标签页）：通过程序调用读取插件配置、表单修改并自动回读验证是否真实生效">插件设置</button></div>' +
+    '<div id="extDepsHint" style="display:none;margin:2px 0 8px;color:#b3392e"></div>' +
+    '<h3 style="margin:4px 0 6px">模拟点击安装</h3>' +
+    '<div class="muted" style="margin:2px 0 8px">程序会模拟人工点击操作 Chrome 完成安装（导航扩展程序页面、点击“加载未打包的扩展程序”并填写插件目录），模拟操作过程中人工不要操作鼠标与键盘（约10秒）。</div>' +
+    '<div class="row" style="padding:4px 0"><button class="btn" id="btnUiInstall" title="模拟人工点击操作日常Chrome完成插件安装（约10秒，期间请勿操作键鼠）">模拟点击安装</button></div>' +
+    '<h3 style="margin:14px 0 6px">通过注册表安装</h3>' +
+    '<div class="muted" style="margin:2px 0 8px"><span style="color:#b3392e;font-weight:700">执行安装及卸载操作时需要人工点击确认</span>；安装后无法人工通过Chrome管理扩展程序页面卸载及管理插件</div>' +
+    '<div class="row" style="padding:4px 0"><button class="btn" id="btnRegInstall" title="打包CRX并写入注册表策略（强制安装），之后自动在chrome://policy重新加载政策；可能弹出UAC确认框">注册表安装</button>' +
+    '<button class="btn warn" id="btnRegUninstall" title="删除注册表策略、自动重新加载政策并移除已安装的插件（约1~4分钟，可能弹出UAC确认框）">卸载</button></div>' +
+    '<h3 style="margin:14px 0 4px">执行进度</h3>' +
+    '<div class="pane" style="flex:1;min-height:120px"><pre id="extTaskLog" style="padding:8px;white-space:pre-wrap">（暂无日志）</pre></div>' +
+    '</div>';
+  $('#btnRegInstall').onclick = () => confirmExtTask('registry_install');
+  $('#btnRegUninstall').onclick = () => confirmExtTask('registry_uninstall');
+  $('#btnUiInstall').onclick = () => confirmExtTask('ui_install');
+  $('#btnExtSettings').onclick = () => window.open('/extension-settings', '_blank');
+  $('#overlay').style.display = 'block';
+  pollExtTask(true);
+};
+
+$('#btnInstallExtAuto').onclick = showAutoInstallPopup;
+
+// 点击开始安装/卸载时先弹确认框（需求「统一要求」）：提示执行过程桌面
+// 会显示绿色边框、过程中请勿人工操作鼠标键盘；注册表方式（安装与卸载
+// 都经 regedit UAC）额外提示可能需要人工点击确认。确认后重开自动安装
+// 弹窗展示执行进度（extTaskLog 所在），取消返回该弹窗。
+const EXT_TASK_LABELS = {registry_install: '注册表安装',
+                         registry_uninstall: '注册表卸载',
+                         ui_install: '模拟点击安装'};
+const EXT_TASK_UAC = {registry_install: true,
+                      registry_uninstall: true, ui_install: false};
+
+function confirmExtTask(kind) {
+  const label = EXT_TASK_LABELS[kind] || kind;
+  $('#popTitle').textContent = '确认' + label;
+  $('#popBody').innerHTML =
+    '<div style="font-size:13px;line-height:1.9;max-width:560px">' +
+    '<div>即将执行：<b>' + esc(label) + '</b></div>' +
+    '<div style="margin-top:8px">执行过程桌面会显示<b>绿色边框</b>（操作完毕时结束），过程中请<b>不要人工操作鼠标键盘</b>。</div>' +
+    (EXT_TASK_UAC[kind]
+      ? '<div style="margin-top:8px;color:#b3392e;font-weight:700">执行过程可能需要人工点击确认（UAC 弹出框）。</div>'
+      : '') +
+    '<div class="row" style="margin-top:14px">' +
+    '<button class="btn" id="btnExtConfirm" title="确认后开始执行，可在执行进度中查看日志">确认执行</button>' +
+    '<button class="btn" id="btnExtCancel" title="取消本次操作，不开始执行">取消</button></div>' +
+    '</div>';
+  $('#btnExtConfirm').onclick = () => {
+    showAutoInstallPopup();
+    startExtTask(kind);
+  };
+  $('#btnExtCancel').onclick = showAutoInstallPopup;
+  $('#overlay').style.display = 'block';
+}
+
+// 页头"Chrome插件设置"按钮（需求：打开Chrome插件自身的设置页——即插件
+// 安装后打开的那个页面，非本项目页面）：经 externally_connectable 消息
+// 通道发 open_options 指令，插件自己在新标签页打开 options.html（docs/
+// chrome插件配置页网页按钮打开设计 实测方案）。未安装/连不上时提示。
+$('#btnExtSettingsTop').onclick = async () => {
+  const rt = window.chrome && chrome.runtime;
+  if (!rt || !rt.sendMessage) {
+    toastMsg('未检测到Chrome插件（或插件版本低于1.1.4），请先经页头"安装Chrome插件-人工"或"安装Chrome插件-自动"安装', 'err', 8000);
+    return;
+  }
+  const r = await api('/api/extension/id_candidates');
+  const ids = r.ids || [];
+  let opened = false, lastErr = '';
+  for (const id of ids) {
+    const res = await new Promise(resolve => {
+      try {
+        rt.sendMessage(id, {type: 'open_options'}, resp => {
+          const e = chrome.runtime.lastError ? chrome.runtime.lastError.message : null;
+          resolve({resp, e});
+        });
+      } catch (err) { resolve({resp: null, e: String(err)}); }
+    });
+    if (res.resp && res.resp.ok) { opened = true; break; }
+    lastErr = res.e || (res.resp && res.resp.error) || '';
+  }
+  if (opened) {
+    toastMsg('已在新标签页打开Chrome插件设置页', 'ok');
+  } else if (!ids.length) {
+    toastMsg('未检测到Chrome插件（无候选扩展ID：未配置且注册表未安装），请先安装插件；解压版可在"安装Chrome插件-自动"页的"插件设置"中配置扩展ID', 'err', 10000);
+  } else {
+    toastMsg('未检测到Chrome插件（候选ID均未连上' + (lastErr ? '：' + lastErr : '') + '），请确认插件已安装在当前浏览器', 'err', 10000);
+  }
+};
+
+// 自动安装后台任务：启动 + 轮询进度日志
+let extTaskTimer = null;
+async function startExtTask(kind) {
+  const r = await api('/api/extension/' + kind, {method: 'POST'});
+  if (r.error) {
+    toastMsg(r.error, 'err', 5000);
+    const el = document.getElementById('extTaskLog');
+    if (el) {
+      el.textContent = (el.textContent === '（暂无日志）' ? '' : el.textContent + String.fromCharCode(10)) + '[错误] ' + r.error;
+    }
+    return;
+  }
+  pollExtTask();
+}
+function pollExtTask(once) {
+  clearInterval(extTaskTimer);
+  const tick = async () => {
+    const el = document.getElementById('extTaskLog');
+    if (!el) { clearInterval(extTaskTimer); return; }
+    const st = await api('/api/extension/install_status');
+    if (st.error) return;
+    const dh = document.getElementById('extDepsHint');
+    if (dh && st.deps) {
+      const missing = [];
+      if (!st.deps.crx3) missing.push('crx3（注册表安装需要）');
+      if (!st.deps.pywinauto) missing.push('pywinauto（模拟点击安装/卸载需要）');
+      if (missing.length) {
+        dh.textContent = '依赖缺失：' + missing.join('、') + '。请用当前服务的 Python 执行 pip install 安装后重启服务，或经 start.bat 用项目 .venv 启动';
+        dh.style.display = 'block';
+      } else {
+        dh.style.display = 'none';
+      }
+    }
+    let text = (st.messages || []).join('\n');
+    if (st.running) text += '\n[进行中]';
+    else if (st.done === true) text += '\n[完成]';
+    else if (st.done === false) text += '\n[失败]';
+    if (st.error) text += '\n[错误] ' + st.error;
+    el.textContent = text || '（暂无日志）';
+    el.scrollTop = el.scrollHeight;
+    if (!st.running && !once) clearInterval(extTaskTimer);
+  };
+  tick();
+  if (!once) extTaskTimer = setInterval(tick, 1500);
+}
+
+// 页头"AI自主操作Chrome"：弹窗三个 TAB（a. 依赖环境准备 + b. AI Agent MCP配置 + c. 提示词模板）
+// 需求：打开页面时提示词模板自动复制到剪贴板，另有复制按钮；
+// a 中提供启动/检测用于抓包的Chrome（与抓包页同款按钮与状态）；
+// b 分两种情况（上下用框包围）：使用Claude Code（输入项目目录一键写入
+// .mcp.json 与 .claude\settings.local.json）、使用其他AI Agent（复制MCP安装命令提示词）
+$('#btnAiOps').onclick = async () => {
+  const r = await api('/api/ai_prompt');
+  if (r.error) { toastMsg('获取提示词模板失败：' + r.error, 'err', 5000); return; }
+  const st = await api('/api/status');
+  const cdp = st.cdp_port || 9222, port = st.port || 33445;
+  $('#popTitle').textContent = 'AI自主操作Chrome';
+  $('#popBody').innerHTML =
+    '<div style="display:flex;flex-direction:column;flex:1;min-height:0">' +
+    '<div style="margin:2px 0 8px;font-size:13px">当需要AI根据用户要求自主操作Chrome，进行前端页面分析、抓包以生成脚本时，可参考以下步骤</div>' +
+    '<div class="tabs">' +
+    '<button class="tab-btn active" data-tab="aidep" title="AI自主操作Chrome所需的依赖环境说明，以及启动/检测用于抓包的Chrome">a. 依赖环境准备</button>' +
+    '<button class="tab-btn" data-tab="aimcp" title="AI Agent的MCP配置：使用Claude Code可一键写入配置，使用其他AI Agent复制安装命令">b. AI Agent MCP配置</button>' +
+    '<button class="tab-btn" data-tab="aip" title="AI自主操作的提示词模板（打开窗口时已自动复制）">c. 提示词模板</button></div>' +
+    '<div class="tab-panel active" id="panel-aidep" style="font-size:13px;line-height:1.9;overflow:auto">' +
+    '<table style="max-width:560px"><tr><th style="width:170px">依赖</th><th>安装方式</th></tr>' +
+    '<tr><td>Chrome浏览器</td><td>下载安装包并安装</td></tr>' +
+    '<tr><td>nodejs</td><td>下载安装包并安装</td></tr>' +
+    '<tr><td>chrome-devtools-mcp</td><td><code style="font-family:Consolas,monospace">npm install -g chrome-devtools-mcp</code></td></tr></table>' +
+    // 打开用于抓包的Chrome：与上方依赖用一行横线分隔（需求：标题不展示、仅按钮/状态/红字说明）
+    '<hr style="border:0;border-top:1px solid #e3e6ea;margin:12px 0 0">' +
+    '<div class="row" style="margin:10px 0 0">' +
+    '<button class="btn chromeStartBtn" id="btnAiChrome" title="查找Chrome安装目录并启动带CDP调试端口的独立实例，用于抓包（已启动则不重复启动）">启动用于抓包的Chrome</button>' +
+    '<button class="btn" id="btnAiCheckChrome" title="立即检测抓包Chrome进程与CDP连接状态（状态变化自动推送，轮询兜底每30秒一次）">检测Chrome进程</button>' +
+    '<span id="aiChromeState" class="badge chromeState">未检测</span></div>' +
+    '<div style="margin:6px 0 0;color:#b3392e;font-weight:700;font-size:13px">' +
+    '需要启动用于抓包的Chrome，在其中打开并登录需要生成脚本的网站</div>' +
+    '</div>' +
+    '<div class="tab-panel" id="panel-aimcp" style="display:none;font-size:13px;line-height:1.9;overflow:auto">' +
+    '<div style="margin:4px 0 8px">在需要使用的AI Agent中，配置MCP chrome-devtools-attach、chrome-operate</div>' +
+    '<div class="cfg-box">' +
+    '<div class="cfg-title">使用Claude Code</div>' +
+    '<div style="margin:2px 0 6px">若使用Claude Code，可在以下输入框指定需要作为Claude Code项目目录的完整路径，再点击“配置”按钮配置以下MCP及允许的权限：</div>' +
+    '<div class="row" style="margin:2px 0 8px">' +
+    '<input type="text" id="ccProjDir" placeholder="Claude Code项目目录的完整路径" style="flex:1;min-width:300px" ' +
+    'title="需要作为Claude Code项目目录的完整路径，配置将写入该目录下的 .mcp.json 与 .claude\\settings.local.json">' +
+    '<button class="btn" id="btnCcConf" title="在以上目录写入 .mcp.json 与 .claude\\settings.local.json（文件不存在则创建，已存在则增加缺失配置，同名key的value覆盖更新）">配置</button></div>' +
+    '<textarea id="ccConfText" readonly rows="4" style="width:100%;white-space:pre" ' +
+    'title="将写入的 .mcp.json 与 .claude\\settings.local.json 配置（CDP端口与监听端口已按当前参数配置填充，默认4行可滚动/拖动调整，点击全选）" onclick="this.select()"></textarea>' +
+    '</div>' +
+    '<div class="cfg-box">' +
+    '<div class="cfg-title">使用其他AI Agent</div>' +
+    '<div style="margin:2px 0 6px">若使用其他AI Agent，则复制以下提示词并执行，或修改为对应的MCP安装命令并执行：</div>' +
+    '<textarea id="otherAgentCmd" readonly rows="3" style="width:100%;white-space:pre" ' +
+    'title="提供给其他AI Agent的MCP安装命令提示词（CDP端口与监听端口已按当前参数配置填充，默认3行可滚动/拖动调整，点击全选）" onclick="this.select()"></textarea>' +
+    '<div class="row" style="padding:4px 0"><button class="btn" id="cpOtherCmd" title="复制以上提示词到操作系统剪贴板">复制</button></div>' +
+    '</div></div>' +
+    '<div class="tab-panel" id="panel-aip" style="display:none;flex-direction:column;flex:1;min-height:0">' +
+    '<div style="margin:4px 0 8px">编辑以下提示词，补充需要AI在前端页面执行哪些操作、需要生成的Python脚本的具体要求，复制给AI Agent执行，等待AI分析并生成脚本</div>' +
+    '<div style="margin:0 0 8px;color:#b3392e;font-weight:700">AI Agent会话中使用chrome-devtools MCP工具后，上下文会比较大，不建议在对应会话中执行其他无关操作，可能消耗比较多token</div>' +
+    '<div class="md-edit"><pre id="mdHl2"></pre>' +
+    '<textarea id="popEdit2" spellcheck="false"></textarea></div>' +
+    '<div class="row" style="padding:4px 0"><button class="btn" id="popCopy2" title="复制编辑框中的全部内容到剪贴板">复制</button></div>' +
+    '</div></div>';
+  // TAB 切换（提示词模板面板为 flex 列布局，其余为 block）
+  document.querySelectorAll('#popBody .tab-btn').forEach(btn => {
+    btn.onclick = () => {
+      document.querySelectorAll('#popBody .tab-btn').forEach(b =>
+        b.classList.toggle('active', b === btn));
+      document.querySelectorAll('#popBody .tab-panel').forEach(pn =>
+        pn.style.display = pn.id === 'panel-' + btn.dataset.tab
+          ? (pn.id === 'panel-aip' ? 'flex' : 'block') : 'none');
+    };
+  });
+  // 可编辑模板 + markdown 高亮（与 showText 同口径）
+  const ta = $('#popEdit2'), hl = $('#mdHl2');
+  const render = () => { hl.innerHTML = highlightMarkdown(ta.value) + '\n'; };
+  ta.value = r.prompt;
+  render();
+  textEditDirty = false;   // 新打开时重置
+  ta.oninput = () => { render(); textEditDirty = true; };
+  ta.onscroll = () => { hl.scrollTop = ta.scrollTop; hl.scrollLeft = ta.scrollLeft; };
+  $('#popCopy2').onclick = () => copyText(ta.value);
+  // TAB a：打开用于抓包的Chrome（与抓包页同款双态按钮：未启动→启动，已启动→置顶，
+  // 文字/tooltip 由 renderState 按状态同步；状态徽标共用 .chromeState）
+  $('#btnAiChrome').onclick = chromeToggle;
+  $('#btnAiCheckChrome').onclick = refreshStatus;
+  // TAB b：使用Claude Code（一键写入配置）+ 使用其他AI Agent（复制安装命令提示词）
+  const mcpJsonText = '# 在.mcp.json的mcpServers配置\n' +
+    JSON.stringify({
+      mcpServers: {
+        'chrome-devtools-attach': {
+          type: 'stdio', command: 'npx',
+          args: ['-y', 'chrome-devtools-mcp@latest',
+                 '--browser-url=http://127.0.0.1:' + cdp],
+          env: {}
+        },
+        'chrome-operate': {
+          type: 'sse', url: 'http://127.0.0.1:' + port + '/mcp/sse'
+        }
+      }
+    }, null, 2);
+  const settingsText = '# 在.claude\\settings.local.json配置\n' +
+    JSON.stringify({
+      permissions: {
+        allow: ['Bash(*)', 'Read(*)', 'Edit(*)', 'Write(*)',
+                'WebSearch(*)', 'WebFetch(*)',
+                'mcp__chrome-devtools-attach__*', 'mcp__chrome-operate__*']
+      },
+      enableAllProjectMcpServers: true,
+      enabledMcpjsonServers: ['chrome-devtools-attach', 'chrome-operate']
+    }, null, 2);
+  const otherCmdText = '将以下MCP安装命令转换为当前AI Agent支持的方式执行，优先在当前项目目录安装，若不支持则全局安装：\n' +
+    'claude mcp add chrome-devtools-attach --scope project -- npx chrome-devtools-mcp@latest --browserUrl http://127.0.0.1:' + cdp + '\n' +
+    'claude mcp add chrome-operate --scope project --transport sse http://127.0.0.1:' + port + '/mcp/sse';
+  // 一个不可编辑文本框展示将写入的两份配置（默认2行，可滚动/拖动调整）
+  $('#ccConfText').value = mcpJsonText + '\n\n' + settingsText;
+  $('#otherAgentCmd').value = otherCmdText;
+  $('#cpOtherCmd').onclick = () => copyText($('#otherAgentCmd').value);
+  $('#btnCcConf').onclick = async () => {
+    const dir = $('#ccProjDir').value.trim();
+    const b = $('#btnCcConf');
+    b.disabled = true;
+    const rr = await api('/api/aiops/claude_code_config',
+      { method: 'POST', body: JSON.stringify({ path: dir }) });
+    toastMsg(rr.ok ? rr.message : (rr.error || '配置失败'),
+             rr.ok ? 'ok' : 'err', 8000);
+    b.disabled = false;
+  };
+  renderState(st);   // 打开时即同步弹窗内 Chrome 状态徽标（此后随 WS/轮询刷新）
+  copyText(r.prompt, true);
+  $('#overlay').style.display = 'block';
+};
+
+// 页头"人工操作后AI生成脚本"：人工操作流程步骤说明
+$('#btnManualOps').onclick = () => {
+  $('#popTitle').textContent = '人工操作后AI生成脚本';
+  const steps = [
+    '在“抓包”标签页点击“启动用于抓包的Chrome”',
+    '在用于抓包的Chrome打开并登录需要生成脚本的网站',
+    '在“抓包”标签页点击“开始抓包”',
+    '在用于抓包的Chrome执行需要生成脚本的操作',
+    '在“抓包”标签页点击“结束抓包”',
+    '在“抓包记录”标签页点击刚才生成的目录',
+    '点击“生成脚本提示词模板”按钮',
+    '修改提示词，说明人工在网页的操作描述与生成Python脚本具体要求',
+    '复制提示词给AI Agent执行'
+  ];
+  $('#popBody').innerHTML =
+    '<div style="flex:1;min-height:0;overflow:auto">' +
+    '<div style="margin:6px 0 10px;font-size:13px">需要由人工在Chrome执行操作，再由AI生成脚本时，按照以下步骤执行：</div>' +
+    '<ol style="margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:8px">' +
+    steps.map((s, i) =>
+      '<li style="display:flex;align-items:flex-start;gap:10px;background:#f7f9fc;border:1px solid #e3e6ea;border-radius:6px;padding:9px 12px;font-size:13px;line-height:1.7">' +
+      '<span style="flex:none;width:22px;height:22px;border-radius:50%;background:#1f3a5f;color:#fff;font-size:12px;font-weight:600;display:flex;align-items:center;justify-content:center;margin-top:1px">' + (i + 1) + '</span>' +
+      '<span>' + esc(s).replace(/“([^”]+)”/g, '<b>“$1”</b>') + '</span></li>').join('') +
+    '</ol></div>';
+  $('#overlay').style.display = 'block';
+};
+
+
+// 页头"执行生成的脚本"：前提与执行方式说明（卡片式列表，与人工操作步骤同风格）
+$('#btnRunScript').onclick = () => {
+  $('#popTitle').textContent = '执行生成的脚本';
+  const pre = [
+    '在日常使用的Chrome登录需要操作的网站',
+    '在日常使用的Chrome安装chrome_capture_operate 插件并配置Cookie推送，见“安装Chrome插件”相关页面的提示'
+  ];
+  const ways = [
+    '在“快速执行脚本”页面人工触发执行',
+    '在“快速执行脚本”页面添加到系统托盘菜单执行',
+    '在“定时执行脚本”页面配置为定时执行',
+    '人工执行生成的Python脚本',
+    'AI Agent或其他程序执行生成的Python脚本'
+  ];
+  const chip = t =>
+    '<span style="display:inline-block;background:#1f3a5f;color:#fff;font-size:13px;font-weight:600;padding:3px 12px;border-radius:4px;margin:12px 0 8px">' + t + '</span>';
+  const item = (badge, text) =>
+    '<li style="display:flex;align-items:flex-start;gap:10px;background:#f7f9fc;border:1px solid #e3e6ea;border-radius:6px;padding:9px 12px;font-size:13px;line-height:1.7">' +
+    '<span style="flex:none;width:22px;height:22px;border-radius:50%;background:#1f3a5f;color:#fff;font-size:12px;font-weight:600;display:flex;align-items:center;justify-content:center;margin-top:1px">' + badge + '</span>' +
+    '<span>' + esc(text).replace(/“([^”]+)”/g, '<b>“$1”</b>') + '</span></li>';
+  const list = arr => '<ul style="margin:0 0 4px;padding:0;list-style:none;display:flex;flex-direction:column;gap:8px">' + arr.join('') + '</ul>';
+  $('#popBody').innerHTML =
+    '<div style="flex:1;min-height:0;overflow:auto">' +
+    chip('前提') + list(pre.map(s => item('&#10003;', s))) +
+    chip('执行方式') + list(ways.map((s, i) => item(String(i + 1), s))) +
+    '</div>';
+  $('#overlay').style.display = 'block';
+};
+
 
 document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   document.querySelectorAll('nav button').forEach(x => x.classList.toggle('active', x === b));
@@ -437,6 +843,7 @@ document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   if (b.dataset.tab === 'exec') loadScripts();
   if (b.dataset.tab === 'sched') loadSchedules();
   if (b.dataset.tab === 'settings') loadConf();
+  if (b.dataset.tab === 'mcp') loadMcpTools();
   if (b.dataset.tab === 'cookies') loadReceives();
   if (b.dataset.tab === 'multi') loadMultiProfiles();
   if (b.dataset.tab === 'usage') loadUsage();
@@ -464,7 +871,7 @@ async function openMultiProfile(id) {
   const r = await api(`/api/multi-profiles/${id}/open`, { method: 'POST' });
   toastMsg(r.message || (r.ok ? '已启动' : '启动失败'), r.ok ? 'ok' : 'err', 5000);
   if (r.ok) {
-    toastMsg('首次使用请在该Chrome中按"安装Chrome插件"安装本工具插件，并在插件"参数配置"页的"Chrome实例编号"中填写 ' + id + '（编号与Web页列表对应，修改后下一次推送生效）', 'ok', 12000);
+    toastMsg('首次使用请在该Chrome中按页头"安装Chrome插件-人工"或"安装Chrome插件-自动"的说明安装本工具插件，并在插件"参数配置"页的"Chrome实例编号"中填写 ' + id + '（编号与Web页列表对应，修改后下一次推送生效）', 'ok', 12000);
   }
 }
 
@@ -529,6 +936,7 @@ function makeDraggable(handle, leftPane, storeKey) {
   document.addEventListener('mouseup', () => { dragging = false; handle.classList.remove('on'); });
 }
 makeDraggable($('#histDrag'), $('#histLeft'), 'hist_left_width');
+makeDraggable($('#execDrag'), $('#execLeft'), 'exec_left_width');
 
 /* ---------- HTTP 文本高亮 ---------- */
 function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
@@ -584,30 +992,36 @@ function showRecord(title, content) {
   });
   $('#overlay').style.display = 'block';
 }
+let textEditDirty = false;  // 可编辑文本弹窗的"有修改"标记（需求：编辑后点空白处需确认）
+
 function showText(title, text, withCopy) {
   $('#popTitle').textContent = title;
   if (withCopy) {
     // 可编辑文本框 + markdown 高亮：高亮层与输入层同度量叠放，
-    // 输入层文字透明仅留光标，输入实时重高亮，滚动同步
+    // 输入层文字透明仅留光标，输入实时重高亮，滚动同步。
+    // 需求：最上方提示填写说明；打开时自动复制并在最下方提示
+    // "已复制当前内容"（最下方不再有其他提示，点复制按钮走toast弹窗提示）
     $('#popBody').innerHTML =
+      '<div style="margin:2px 0 8px;font-size:13px">请在“人工在网页的操作描述”与“生成Python脚本具体要求”两节按需填写后复制，提供给AI Agent执行并等待</div>' +
       '<div class="md-edit"><pre id="mdHl"></pre>' +
       '<textarea id="popEdit" spellcheck="false"></textarea></div>' +
       '<div class="row" style="padding:4px 0"><button class="btn" id="popCopy" title="复制编辑框中的全部内容到剪贴板">复制</button>' +
-      '<span class="muted">已自动复制当前内容；请在"人工在网页的操作描述"与"生成Python脚本具体要求"两节填写后复制</span></div>';
+      '<span class="muted" id="copiedHint">已复制当前内容</span></div>';
     const ta = $('#popEdit'), hl = $('#mdHl');
     const render = () => { hl.innerHTML = highlightMarkdown(ta.value) + '\n'; };
     ta.value = text;
     render();
-    ta.oninput = render;
+    textEditDirty = false;   // 新打开时重置
+    ta.oninput = () => { render(); textEditDirty = true; };
     ta.onscroll = () => { hl.scrollTop = ta.scrollTop; hl.scrollLeft = ta.scrollLeft; };
     $('#popCopy').onclick = () => copyText(ta.value);
-    copyText(text, true);  // 打开时自动复制不打扰；点复制按钮才提示
+    copyText(text, true);  // 打开时自动复制（不打扰toast），最下方文字提示"已复制当前内容"
   } else {
     $('#popBody').innerHTML = `<div class="pane"><pre>${esc(text)}</pre></div>`;
   }
   $('#overlay').style.display = 'block';
 }
-function closePop() {
+function closePop(force) {
   // 搜索结果的查看内容关闭：恢复搜索结果展示（需求：关闭后仍展示刚才的搜索记录）
   if (searchCtx && searchCtx.viewing) {
     searchCtx.viewing = false;
@@ -615,7 +1029,32 @@ function closePop() {
     return;
   }
   searchCtx = null;  // 关闭搜索弹窗本身：清空上下文
+  // 需求：可编辑文本弹窗有修改且未确认时，点击页面空白处/关闭按钮
+  // 先弹确认提示（离开则编辑内容不保留）
+  if (!force && textEditDirty) {
+    confirmLeaveEditable();
+    return;
+  }
+  textEditDirty = false;
   $('#overlay').style.display = 'none';
+}
+
+/* 编辑后离开确认（非模态 toast，10 秒无操作自动消失=继续编辑） */
+function confirmLeaveEditable() {
+  document.querySelectorAll('.edit-leave-toast').forEach(el => el.remove());
+  let box = document.getElementById('toasts');
+  if (!box) { box = document.createElement('div'); box.id = 'toasts'; document.body.appendChild(box); }
+  const toast = document.createElement('div');
+  toast.className = 'toast err edit-leave-toast';
+  toast.style.cssText = 'display:flex;gap:12px;align-items:center;max-width:560px';
+  toast.innerHTML = '<span style="flex:1">编辑内容尚未复制，确认离开？离开后编辑不会保留</span>' +
+    '<button class="btn" style="margin:0;padding:3px 10px;font-size:12px;flex:none" title="关闭弹窗，编辑内容不保留">确认离开</button>' +
+    '<button class="btn" style="margin:0;padding:3px 10px;font-size:12px;flex:none;background:#187a3c" title="继续编辑，弹窗保持打开">继续编辑</button>';
+  box.appendChild(toast);
+  const [leaveBtn, stayBtn] = toast.querySelectorAll('button');
+  leaveBtn.onclick = () => { toast.remove(); closePop(true); };
+  stayBtn.onclick = () => toast.remove();
+  setTimeout(() => { try { toast.remove(); } catch (e) {} }, 10000);
 }
 
 /* ---------- Python / Markdown 语法高亮（本地实现，无外部依赖） ---------- */
@@ -689,6 +1128,7 @@ $('#overlay').addEventListener('click', e => { if (e.target.id === 'overlay') cl
 
 /* ---------- 状态 & WebSocket ---------- */
 let lastCapState = null;
+let chromeAliveNow = false;   // 抓包Chrome存活状态：抓包页与"AI自主操作Chrome"弹窗的双态按钮共用
 function renderState(st) {
   if (st.session) curCaptureSession = st.session;
   // 结束抓包（含 Chrome 断开）：从抓包中/已暂停转为空闲时清空展示的记录
@@ -696,11 +1136,26 @@ function renderState(st) {
     document.querySelector('#recTable tbody').innerHTML = '';
   }
   lastCapState = st.state;
-  const cs = $('#chromeState');
-  cs.textContent = st.chrome_alive ? 'Chrome 已启动' : 'Chrome 未启动';
-  cs.className = 'badge ' + (st.chrome_alive ? 'ok' : 'bad');
-  // Chrome 存活期间常驻提示：操作要在新启动的抓包 Chrome 中进行
-  $('#chromeHint').style.display = st.chrome_alive ? '' : 'none';
+  // 双态按钮（需求：Chrome 已启动时文字变为"置顶用于抓包的Chrome进程"、
+  // 修改按钮背景、点击改为置顶；进程结束后文字、颜色及作用恢复）
+  // ——抓包页与弹窗共用同一 class 同步
+  chromeAliveNow = !!st.chrome_alive;
+  document.querySelectorAll('.chromeStartBtn').forEach(b => {
+    b.textContent = chromeAliveNow ? '置顶用于抓包的Chrome进程' : '启动用于抓包的Chrome';
+    b.title = chromeAliveNow
+      ? '将用于抓包的Chrome窗口还原（若最小化）并置顶显示到屏幕最前'
+      : '查找Chrome安装目录并启动带CDP调试端口的独立实例，用于抓包（已启动则不重复启动）';
+    b.classList.toggle('chrome-top', chromeAliveNow);
+  });
+  // Chrome 状态徽标与常驻提示：抓包页与"AI自主操作Chrome"弹窗共用
+  // （class 选择器同时覆盖两处，弹窗打开时也随 WS/轮询同步刷新）
+  document.querySelectorAll('.chromeState').forEach(cs => {
+    cs.textContent = st.chrome_alive ? 'Chrome 已启动' : 'Chrome 未启动';
+    cs.className = 'badge chromeState ' + (st.chrome_alive ? 'ok' : 'bad');
+  });
+  document.querySelectorAll('.chromeHint').forEach(h => {
+    h.style.display = st.chrome_alive ? '' : 'none';
+  });
   const stateText = {capturing: '进行中(' + st.session + ')', paused: '已暂停(' + st.session + ')', idle: '空闲'}[st.state] || st.state;
   $('#status').textContent =
     `Chrome:${st.chrome_alive ? '已启动' : '未启动'}  CDP:${st.cdp_connected ? '已连接' : '未连接'}  ` +
@@ -743,6 +1198,7 @@ function connectWs() {
       $('#btnPurge').disabled = !(msg.record_count > 0);
     }
     else if (msg.type === 'mark_failed') toastMsg(msg.message, 'err', 8000);
+    // 操作注释经 type=record 广播（addRecordRow 渲染），不再用 toast
     else if (msg.type === 'cookie_push_empty') {
       toastMsg(`接收到的Chrome Cookie数量为0（Chrome实例编号 ${msg.profile}），可能是因为在Chrome插件中未设置推送Cookie范围`, 'err', 10000);
     }
@@ -751,17 +1207,30 @@ function connectWs() {
 }
 
 /* ---------- 抓包 ---------- */
-$('#btnChrome').onclick = async () => {
-  $('#btnChrome').disabled = true;
-  const r = await api('/api/chrome/start', {method: 'POST'});
-  toastMsg(r.message, r.ok ? 'ok' : 'err', 4000);
-  if (r.ok) {
-    toastMsg('请在新启动的用于抓包的Chrome浏览器窗口中操作，不要在日常Chrome浏览器中操作',
-             'ok', 8000);
+// 双态按钮（需求）：Chrome 未启动→启动；已启动→窗口置顶。
+// 抓包页 #btnChrome 与"AI自主操作Chrome"弹窗 #btnAiChrome 共用
+async function chromeToggle() {
+  const btns = [$('#btnChrome'), $('#btnAiChrome')].filter(b => b);
+  btns.forEach(b => { b.disabled = true; });
+  try {
+    if (chromeAliveNow) {
+      const r = await api('/api/chrome/bring_to_front', { method: 'POST' });
+      toastMsg(r.message || (r.ok ? '已置顶' : '置顶失败'),
+               r.ok ? 'ok' : 'err', 4000);
+    } else {
+      const r = await api('/api/chrome/start', { method: 'POST' });
+      toastMsg(r.message, r.ok ? 'ok' : 'err', 4000);
+      if (r.ok) {
+        toastMsg('请在新启动的用于抓包的Chrome浏览器窗口中操作，不要在日常Chrome浏览器中操作',
+                 'ok', 8000);
+      }
+    }
+  } finally {
+    btns.forEach(b => { b.disabled = false; });
+    refreshStatus();
   }
-  $('#btnChrome').disabled = false;
-  refreshStatus();
-};
+}
+$('#btnChrome').onclick = chromeToggle;
 $('#btnCheckChrome').onclick = refreshStatus;
 $('#btnStart').onclick = async () => {
   await pushCaptureConf();
@@ -840,12 +1309,23 @@ $('#ckAllHosts').onchange = () => {
 };
 $('#hostsAll').onclick = () => { document.querySelectorAll('#hostList input').forEach(i => i.checked = true); pushCaptureConf(); };
 $('#hostsNone').onclick = () => { document.querySelectorAll('#hostList input').forEach(i => i.checked = false); pushCaptureConf(); };
+$('#hostsClear').onclick = async () => {
+  const r = await api('/api/capture/hosts/clear', {method: 'POST'});
+  if (r.error) { toastMsg(r.error, 'err'); return; }
+  // 需求：清除后变成全部网址都抓包——"全选（不过滤）"钩选
+  $('#ckAllHosts').checked = true;
+  renderHosts([]);
+  refreshHostListState();
+  pushCaptureConf();
+  toastMsg('已清除访问过的网址记录（' + (r.cleared || 0) + ' 个），当前为全部网址都抓包', 'ok', 4000);
+};
 $('#hostList').addEventListener('change', pushCaptureConf);
 
 async function loadCaptureConf() {
   const c = await api('/api/capture/config');
   $('#ckSuffix').checked = c.suffix_enabled; $('#ckCt').checked = c.content_type_enabled;
   $('#ckType').checked = c.type_enabled !== false;
+  $('#ckOpsInject').checked = c.ops_inject_enabled !== false;
   $('#ckAllHosts').checked = !c.domains || c.domains.length === 0;
   // 恢复网址勾选状态（F5 刷新后保持与后端一致）
   if (c.domains && c.domains.length) {
@@ -862,27 +1342,64 @@ async function pushCaptureConf() {
   const uri_rules = [...document.querySelectorAll('#uriRules .rule-row')].map(d => ({type: d.dataset.type, value: d.dataset.value}));
   await api('/api/capture/config', {method: 'PUT', body: JSON.stringify({
     suffix_enabled: $('#ckSuffix').checked, content_type_enabled: $('#ckCt').checked,
-    type_enabled: $('#ckType').checked,
+    type_enabled: $('#ckType').checked, ops_inject_enabled: $('#ckOpsInject').checked,
     domains, uri_rules, ws_capture: false})});
 }
 
 function addRecordRow(r) {
   const tr = document.createElement('tr');
-  tr.title = '单击打开查看';
-  tr.innerHTML = `<td>${r.seq}</td><td>${esc(r.time || '')}</td><td>${esc(r.method)}</td><td>${esc(r.type || '')}</td><td class="url" title="${esc(r.url)}">${esc(r.url)}</td>` +
-    `<td>${esc(r.content_type || '')}</td><td>${r.req_size}</td><td>${r.resp_size}</td><td>${r.duration_ms}</td>`;
-  tr.onclick = () => viewFile(curCaptureSession, r.seq + '.md');
-  const td = document.createElement('td');
-  const btn = document.createElement('button');
-  btn.className = 'link'; btn.textContent = '查看'; btn.title = '打开查看该记录的请求与返回内容';
-  btn.onclick = ev => { ev.stopPropagation(); viewFile(curCaptureSession, r.seq + '.md'); };
-  td.appendChild(btn); tr.appendChild(td);
+  const isOp = r.type === '操作' || r.is_op;
+  if (isOp) {
+    // 操作行：不同背景色，序号 fr%08d，"查看"打开 {fr序号}.md 详情
+    tr.style.background = '#f7faff';
+    tr.title = '单击打开查看该前端操作的详情';
+    tr.innerHTML = `<td style="color:#98a2ad">${esc(r.seq)}</td><td>${esc(r.time || '')}</td><td style="color:#98a2ad">—</td>` +
+      `<td style="color:#1f6fd6">操作</td><td class="url" title="${esc(r.url)}" style="color:#445">${esc(r.url)}</td>` +
+      `<td>—</td><td>—</td><td>—</td><td>—</td>`;
+    tr.onclick = () => viewFile(curCaptureSession, r.seq + '.md');
+    const td = document.createElement('td');
+    const btn = document.createElement('button');
+    btn.className = 'link'; btn.textContent = '查看'; btn.title = '打开查看该前端操作的详情';
+    btn.onclick = ev => { ev.stopPropagation(); viewFile(curCaptureSession, r.seq + '.md'); };
+    td.appendChild(btn); tr.appendChild(td);
+  } else {
+    tr.title = '单击打开查看';
+    tr.innerHTML = `<td>${r.seq}</td><td>${esc(r.time || '')}</td><td>${esc(r.method)}</td><td>${esc(r.type || '')}</td><td class="url" title="${esc(r.url)}">${esc(r.url)}</td>` +
+      `<td>${esc(r.content_type || '')}</td><td>${r.req_size}</td><td>${r.resp_size}</td><td>${r.duration_ms}</td>`;
+    tr.onclick = () => viewFile(curCaptureSession, r.seq + '.md');
+    const td = document.createElement('td');
+    const btn = document.createElement('button');
+    btn.className = 'link'; btn.textContent = '查看'; btn.title = '打开查看该记录的请求与返回内容';
+    btn.onclick = ev => { ev.stopPropagation(); viewFile(curCaptureSession, r.seq + '.md'); };
+    td.appendChild(btn); tr.appendChild(td);
+  }
   document.querySelector('#recTable tbody').appendChild(tr);
 }
 async function viewFile(session, name) {
   const r = await api(`/api/history/${session}/file?name=${encodeURIComponent(name)}`);
   if (r.error) { toastMsg(r.error, 'err'); return; }
-  showRecord(name, r.content);
+  if (name === 'index.md') {
+    // 汇总文件：以滚动列表展示（不拆分 request/response）
+    showIndexContent(name, r.content);
+  } else if (/^fr\d+\.md$/.test(name)) {
+    // 前端操作详情：原始展示（不按请求/返回拆分）
+    showIndexContent(name, r.content, '前端操作详情（事件字段与原始记录）');
+  } else {
+    showRecord(name, r.content);
+  }
+}
+
+/* 汇总文件/前端操作详情查看：以滚动列表方式展示原始内容 */
+function showIndexContent(title, content, note) {
+  $('#popTitle').textContent = title;
+  $('#popBody').innerHTML =
+    `<div style="display:flex;flex-direction:column;flex:1;min-height:0">` +
+    `<div class="row" style="padding:2px 0;flex:none">` +
+    `<button class="btn" onclick="copyText(document.querySelector('#popBody pre').textContent)" title="复制当前内容">复制</button>` +
+    `<span class="muted">${note || '请求与操作注释统一时间线（抓包中为到达顺序，结束后按时间排序）'}</span></div>` +
+    `<div class="pane" style="flex:1;overflow:auto"><pre style="padding:8px">${esc(content)}</pre></div>` +
+    `</div>`;
+  $('#overlay').style.display = 'block';
 }
 
 /* ---------- 搜索内容（抓包页/抓包记录页共用） ---------- */
@@ -990,13 +1507,13 @@ function showPurgeHist(session) {
     try { return new URL(r.url).hostname; } catch (e) { return ''; }
   }).filter(Boolean))].sort();
   $('#popBody').innerHTML =
-    '<div class="muted" style="font-size:12px">配置过滤条件（与抓包页面口径一致）；删除后序号保持不变，不可恢复</div>' +
+    '<div class="muted" style="font-size:12px">删除规则：<b>被下方条件命中的记录会被删除</b>（如静态资源、未勾选的网址），其余全部保留；页面显示与保存文件同步删除，序号不变、不可恢复。建议先点"预览删除效果"确认</div>' +
     '<div class="split" style="margin-top:8px;flex:1;min-height:0">' +
     '<div style="width:280px;flex:none;overflow:auto">' +
-    '<label class="ck"><input type="checkbox" id="pgType" checked> 根据Chrome请求类型过滤（静态资源）</label>' +
-    '<label class="ck"><input type="checkbox" id="pgSuffix" checked> 根据URL后缀过滤静态资源</label>' +
-    '<label class="ck"><input type="checkbox" id="pgCt" checked> 根据返回content-type过滤静态资源</label>' +
-    '<b style="font-size:13px">忽略的URI（以 / 开头）</b>' +
+    '<label class="ck"><input type="checkbox" id="pgType" checked> 根据Chrome请求类型过滤（勾选后：静态资源类记录被删除）</label>' +
+    '<label class="ck"><input type="checkbox" id="pgSuffix" checked> 根据URL后缀过滤静态资源（勾选后：命中后缀的记录被删除）</label>' +
+    '<label class="ck"><input type="checkbox" id="pgCt" checked> 根据返回content-type过滤静态资源（勾选后：命中类型的记录被删除）</label>' +
+    '<b style="font-size:13px">忽略的URI（以 / 开头，命中即删除）</b>' +
     '<div id="pgUriRulesBox"><div id="pgUriRules"></div><div class="muted" id="pgUriEmpty">（无规则）</div></div>' +
     '<div class="rule-row"><select id="pgRuleType">' +
     '<option value="prefix">以开头</option><option value="equals">等于</option>' +
@@ -1006,9 +1523,9 @@ function showPurgeHist(session) {
     '</div>' +
     '<div style="flex:1;display:flex;flex-direction:column;min-width:0">' +
     '<div class="row" style="align-items:center;gap:10px">' +
-    '<label class="ck" style="margin:0"><input type="checkbox" id="pgAllHosts" checked> 全部（不筛选）</label>' +
-    '<span><button class="link" id="pgHostsAll" title="勾选列表中的全部网址">全选</button> <button class="link" id="pgHostsNone" title="取消勾选列表中的全部网址">取消全选</button></span>' +
-    '<span class="muted">该会话实际访问过的网址</span>' +
+    '<label class="ck" style="margin:0"><input type="checkbox" id="pgAllHosts" checked> 全选（不过滤=全部保留）</label>' +
+    '<span><button class="link" id="pgHostsAll" title="勾选列表中的全部网址（勾选的保留）">全选</button> <button class="link" id="pgHostsNone" title="取消勾选列表中的全部网址（未勾选的将被删除）">取消全选</button></span>' +
+    '<span class="muted">勾选=保留，未勾选网址的记录将被删除</span>' +
     '</div>' +
     '<div class="list" id="pgHostList" style="max-height:120px">' +
     (hosts.map(h => `<label class="ck"><input type="checkbox" value="${esc(h)}"> ${esc(h)}</label>`).join('') ||
@@ -1016,15 +1533,15 @@ function showPurgeHist(session) {
     '</div>' +
     '<div class="row" style="margin-top:8px;align-items:center;gap:10px">' +
     '<b style="font-size:13px">访问记录</b>' +
-    '<button class="link" id="pgPreview" title="切换预览：开启后记录列表只展示按当前条件会保留的数据">预览删除效果（只展示会保留的数据）</button>' +
+    '<button class="link" id="pgPreview" title="切换预览：开启后记录列表只展示按当前条件会保留的数据（其余将被删除）">预览删除效果（只展示会保留的数据）</button>' +
     '<span class="muted" id="pgStat"></span>' +
     '</div>' +
     '<div class="pane" style="flex:1;overflow:auto">' +
     '<table id="pgTable"><thead><tr><th>序号</th><th>请求时间</th><th>方法</th><th>资源类型</th><th>URL</th><th>content-type</th><th>请求body字节数</th><th>返回body字节数</th><th>耗时ms</th><th></th></tr></thead><tbody></tbody></table>' +
     '</div>' +
     '</div></div>' +
-    '<div class="row" style="padding:4px 0"><button class="btn warn" id="pgGo" title="按当前过滤条件删除不满足的记录（二次点击确认，删除后不可恢复）">删除不满足条件的记录</button>' +
-    '<span class="muted">预览状态下执行删除会删除被过滤的记录</span></div>';
+    '<div class="row" style="padding:4px 0"><button class="btn warn" id="pgGo" title="删除被条件命中的记录，其余保留（二次点击确认，删除后不可恢复）">删除被条件命中的记录</button>' +
+    '<span class="muted">删除只作用于被条件命中的记录，与是否处于预览状态无关</span></div>';
   $('#overlay').style.display = 'block';
   const refreshHosts = () => {
     const all = $('#pgAllHosts').checked;
@@ -1115,9 +1632,9 @@ function showPurgeHist(session) {
       tbody.appendChild(tr);
     });
     const total = histRecords.length, keep = rows.length;
-    $('#pgStat').textContent = pgPreviewing
-      ? `预览：共 ${total} 条，保留 ${keep} 条，将删除 ${total - keep} 条`
-      : `共 ${total} 条`;
+    $('#pgStat').innerHTML = pgPreviewing
+      ? `共 ${total} 条｜保留 <b class="ok">${keep}</b> 条｜将删除 <b class="bad">${total - keep}</b> 条`
+      : `共 ${total} 条（当前展示全部；点"预览删除效果"查看将删除哪些）`;
   };
   // 过滤条件变化即时重算预览
   ['pgType', 'pgSuffix', 'pgCt', 'pgAllHosts'].forEach(id => $('#' + id).onchange = () => { refreshHosts(); renderPgRows(); });
@@ -1132,7 +1649,11 @@ function showPurgeHist(session) {
 
   $('#pgGo').onclick = async () => {
     const b = $('#pgGo');
-    if (!b.dataset.armed) { armConfirm(b, '再次点击确认删除', 4); return; }
+    if (!b.dataset.armed) {
+      const dead = histRecords.filter(pgViolates).length;
+      armConfirm(b, `再次点击确认：删除 ${dead} 条，保留 ${histRecords.length - dead} 条`, 6);
+      return;
+    }
     disarmConfirm(b);
     $('#pgStat').textContent = '删除中…';
     const c = pgConf();
@@ -1185,16 +1706,32 @@ async function loadFiles(s) {
   tbody.innerHTML = '';
   (r.records || []).forEach(rec => {
     const tr = document.createElement('tr');
-    tr.title = '单击打开查看';
-    tr.innerHTML = `<td>${rec.seq}</td><td>${esc(rec.time || '')}</td><td>${esc(rec.method)}</td>` +
-      `<td>${esc(rec.type || '')}</td><td class="url" title="${esc(rec.url)}">${esc(rec.url)}</td>` +
-      `<td>${esc(rec.content_type || '')}</td><td>${rec.req_size}</td><td>${rec.resp_size}</td><td>${rec.duration_ms}</td>`;
-    tr.onclick = () => viewFile(s, rec.seq + '.md');
-    const td = document.createElement('td');
-    const btn = document.createElement('button');
-    btn.className = 'link'; btn.textContent = '查看'; btn.title = '打开查看该记录的请求与返回内容';
-    btn.onclick = ev => { ev.stopPropagation(); viewFile(s, rec.seq + '.md'); };
-    td.appendChild(btn); tr.appendChild(td);
+    const isOp = rec.type === '操作';
+    if (isOp) {
+      // 操作行：不同背景色，序号 fr%08d，"查看"打开 {fr序号}.md 详情
+      tr.style.background = '#f7faff';
+      tr.title = '单击打开查看该前端操作的详情';
+      tr.innerHTML = `<td style="color:#98a2ad">${esc(rec.seq)}</td><td>${esc(rec.time || '')}</td><td style="color:#98a2ad">—</td>` +
+        `<td style="color:#1f6fd6">操作</td><td class="url" title="${esc(rec.url)}" style="color:#445">${esc(rec.url)}</td>` +
+        `<td>—</td><td>—</td><td>—</td><td>—</td>`;
+      tr.onclick = () => viewFile(s, rec.seq + '.md');
+      const td = document.createElement('td');
+      const btn = document.createElement('button');
+      btn.className = 'link'; btn.textContent = '查看'; btn.title = '打开查看该前端操作的详情';
+      btn.onclick = ev => { ev.stopPropagation(); viewFile(s, rec.seq + '.md'); };
+      td.appendChild(btn); tr.appendChild(td);
+    } else {
+      tr.title = '单击打开查看';
+      tr.innerHTML = `<td>${rec.seq}</td><td>${esc(rec.time || '')}</td><td>${esc(rec.method)}</td>` +
+        `<td>${esc(rec.type || '')}</td><td class="url" title="${esc(rec.url)}">${esc(rec.url)}</td>` +
+        `<td>${esc(rec.content_type || '')}</td><td>${rec.req_size}</td><td>${rec.resp_size}</td><td>${rec.duration_ms}</td>`;
+      tr.onclick = () => viewFile(s, rec.seq + '.md');
+      const td = document.createElement('td');
+      const btn = document.createElement('button');
+      btn.className = 'link'; btn.textContent = '查看'; btn.title = '打开查看该记录的请求与返回内容';
+      btn.onclick = ev => { ev.stopPropagation(); viewFile(s, rec.seq + '.md'); };
+      td.appendChild(btn); tr.appendChild(td);
+    }
     tbody.appendChild(tr);
   });
   $('#histEmpty').style.display = (r.records && r.records.length) ? 'none' : '';
@@ -1287,7 +1824,7 @@ $('#btnBatchDel').onclick = async () => {
 $('#btnPrompt').onclick = async () => {
   const r = await api(`/api/history/${curSession}/prompt`, {method: 'POST'});
   if (r.error) { toastMsg(r.error, 'err', 8000); return; }
-  showText('生成固化脚本提示词', r.prompt, true);
+  showText('生成脚本提示词模板', r.prompt, true);
 };
 $('#btnDelSess').onclick = async () => {
   const b = $('#btnDelSess');
@@ -1332,7 +1869,7 @@ async function loadScripts() {
       `title="${f.kind === 'py' ? '单击选中用于执行，点"查看"打开内容' : '单击打开查看'}">` +
       `<span class="badge ${f.kind}">${f.kind}</span> ${esc(f.path.split(/[\\/]/).pop())}` +
       ` <span class="muted" style="float:right">${esc(f.mtime || '')}</span>` +
-      (f.kind === 'py' ? ' <button class="link fview" title="查看该py脚本内容（语法高亮）">查看</button>' : '') + `</div>`).join('');
+      (f.kind === 'py' ? ' <button class="link ftray" title="将该脚本添加到系统托盘快速执行脚本菜单（托盘菜单点击即在新控制台窗口执行）">添加到托盘菜单</button>' : '') + (f.kind === 'py' ? ' <button class="link fview" title="查看该py脚本内容（语法高亮）">查看</button>' : '') + `</div>`).join('');
     curScript = null; $('#btnRun').disabled = true;
     if (pys.length === 1) {
       // 只有一个 .py：直接可执行，无需手选
@@ -1358,12 +1895,48 @@ async function loadScripts() {
           pe.classList.add('sel'); curScript = pe.dataset.p; $('#btnRun').disabled = false;
           if (pys.length > 1) $('#pyHint').textContent = '';
         };
+        const ftrayBtn = pe.querySelector('.ftray');
+        if (ftrayBtn) ftrayBtn.onclick = ev => {
+          ev.stopPropagation();
+          addTrayScript(pe.dataset.p);
+        };
         pe.querySelector('.fview').onclick = ev => { ev.stopPropagation(); viewScriptFile(pe.dataset.p, 'py'); };
       }
     });
   });
 }
-/* 配置固化脚本保存目录（全局配置 key=python_scripts_dir_path） */
+/* ---------- 系统托盘快速执行脚本菜单 ---------- */
+async function addTrayScript(path) {
+  const r = await api('/api/tray_scripts/add', {
+    method: 'POST', body: JSON.stringify({path})});
+  if (r.error) { toastMsg(r.error, 'err'); return; }
+  toastMsg('已添加到系统托盘快速执行脚本菜单：' + path.split(/[\/]/).pop(), 'ok', 4000);
+}
+async function showTrayList() {
+  const r = await api('/api/tray_scripts');
+  const scripts = r.scripts || [];
+  $('#popTitle').textContent = '系统托盘快速执行脚本菜单（' + scripts.length + ' 个脚本）';
+  $('#popBody').innerHTML = scripts.length
+    ? '<div class="muted" style="margin-bottom:6px">托盘图标右键→"快速执行脚本"即可执行以下脚本（新控制台窗口展示输出）；移除后立即生效</div>' +
+      '<table><thead><tr><th>脚本路径</th><th>操作</th></tr></thead><tbody>' +
+      scripts.map(p => `<tr><td><code>${esc(p)}</code></td>` +
+        `<td><button class="btn ghost tray-del" data-p="${esc(p)}" title="从系统托盘快速执行脚本菜单移除该脚本">移除</button></td></tr>`).join('') +
+      '</tbody></table>'
+    : '<div class="muted">（尚无脚本被添加到系统托盘快速执行脚本菜单。在"快速执行脚本"页选择脚本目录后，点击 .py 文件项的"添加到托盘菜单"按钮即可）</div>';
+  $('#overlay').style.display = 'block';
+  document.querySelectorAll('#popBody .tray-del').forEach(btn => {
+    btn.onclick = async () => {
+      const r2 = await api('/api/tray_scripts/remove', {
+        method: 'POST', body: JSON.stringify({path: btn.dataset.p})});
+      if (r2.error) { toastMsg(r2.error, 'err'); return; }
+      showTrayList();  // 刷新弹窗列表
+      loadScripts();   // 刷新 py 项按钮状态（已添加的仍显示，按钮幂等）
+    };
+  });
+}
+$('#btnTrayList').onclick = showTrayList;
+
+/* 配置生成的脚本保存目录（全局配置 key=python_scripts_dir_path） */
 async function loadScriptsDirConf() {
   const r = await api('/api/global_conf?key=python_scripts_dir_path');
   $('#cfgScriptsDir').value = r.value || '';
@@ -1478,7 +2051,7 @@ async function showSchedForm(task) {
   if (!withPy.length) { toastMsg('暂无可选的脚本（需在示例目录或用户自定义目录下有含 .py 的子目录）', 'err', 6000); return; }
   $('#popBody').innerHTML =
     '<div class="row" style="flex-wrap:wrap">' +
-    '<label style="display:inline-flex;align-items:center;gap:6px;font-size:13px">脚本子目录 <select id="sfDir" title="选择要定时执行的固化脚本所在子目录"></select></label>' +
+    '<label style="display:inline-flex;align-items:center;gap:6px;font-size:13px">脚本子目录 <select id="sfDir" title="选择要定时执行的脚本所在子目录"></select></label>' +
     '<label style="display:inline-flex;align-items:center;gap:6px;font-size:13px">Python文件 <select id="sfPy" title="选择要定时执行的 .py 脚本"></select></label></div>' +
     '<div class="row" style="margin-top:10px">' +
     '<label class="ck" style="margin:0"><input type="radio" name="sfType" value="at" checked> 在指定时间执行</label>' +
@@ -1720,6 +2293,25 @@ async function viewSchedLog(path, back) {
 }
 
 /* ---------- 参数配置 ---------- */
+const OP_EVENT_TYPES = [
+  ['click', '点击'], ['change', '填写值/勾选'], ['submit', '表单提交'],
+  ['keydown', '按键(F5/回车/Esc)'], ['route', '路由变化(SPA)'],
+  ['page_load', '页面加载'], ['pagehide', '页面卸载'],
+  ['contextmenu', '右键菜单'], ['copy', '复制'], ['paste', '粘贴'],
+  ['pointerdown', '按下(与点击重复)'], ['focusin', '聚焦(与点击重复)'],
+  ['scroll', '滚动(纯噪音)']];
+function renderOpTypes(selected) {
+  const box = $('#cfgOpTypes');
+  box.innerHTML = '';
+  OP_EVENT_TYPES.forEach(([t, label]) => {
+    const lb = document.createElement('label');
+    lb.className = 'ck';
+    lb.style.marginRight = '16px';
+    lb.title = '事件类型 ' + t;
+    lb.innerHTML = `<input type="checkbox" data-optype="${t}"${selected.includes(t) ? ' checked' : ''}> ${label}`;
+    box.appendChild(lb);
+  });
+}
 async function loadConf() {
   const c = await api('/api/config');
   $('#cfgPort').value = c.port; $('#cfgAuto').checked = c.auto_start;
@@ -1727,20 +2319,122 @@ async function loadConf() {
   $('#cfgCt').value = (c.content_type_filter || []).join('\n');
   $('#cfgTypeFilter').value = (c.type_filter || []).join('\n');
   $('#cfgCdp').value = c.cdp_port; $('#cfgTimeout').value = c.exec_timeout_sec;
+  renderOpTypes(c.op_event_types || []);
 }
 async function saveConf() {
+  const opTypes = Array.from(document.querySelectorAll('#cfgOpTypes input[data-optype]'))
+    .filter(i => i.checked).map(i => i.dataset.optype);
   const r = await api('/api/config', {method: 'PUT', body: JSON.stringify({
     port: +$('#cfgPort').value, auto_start: $('#cfgAuto').checked,
     suffix_filter: $('#cfgSuffix').value.split('\n').map(s => s.trim()).filter(Boolean),
     content_type_filter: $('#cfgCt').value.split('\n').map(s => s.trim()).filter(Boolean),
     type_filter: $('#cfgTypeFilter').value.split('\n').map(s => s.trim()).filter(Boolean),
-    cdp_port: +$('#cfgCdp').value, exec_timeout_sec: +$('#cfgTimeout').value})});
+    cdp_port: +$('#cfgCdp').value, exec_timeout_sec: +$('#cfgTimeout').value,
+    op_event_types: opTypes})});
   toast($('#confMsg'), r.ok ? '已保存。' + (r.note || '') : '保存失败', !r.ok);
 }
 
+/* ---------- MCP 工具说明 ---------- */
+async function loadMcpTools() {
+  const r = await api('/api/mcp/tools');
+  const st = await api('/api/status');
+  $('#mcpSseUrl').value = `http://127.0.0.1:${st.port}/mcp/sse`;
+  $('#mcpInstallCmd').value = 'claude mcp add --transport sse --scope user chrome-operate http://127.0.0.1:' + st.port + '/mcp/sse';
+  const list = $('#mcpToolList');
+  list.innerHTML = '';
+  (r.tools || []).forEach(t => {
+    const li = document.createElement('li');
+    li.className = 'mcp-tool';
+    li.style.cssText = 'padding:6px 8px;border-bottom:1px solid #eee;cursor:pointer';
+    const brief = (t.description || '').split('。')[0] || '';
+    li.innerHTML = `<b>${esc(t.name)}</b><div class="muted" style="font-size:12px">${esc(brief)}</div>`;
+    li.title = '点击查看 ' + t.name + ' 工具的详细说明及参数';
+    li.onclick = () => {
+      document.querySelectorAll('#mcpToolList .mcp-tool').forEach(x =>
+        x.style.background = '');
+      li.style.background = '#f0f3f6';
+      renderMcpToolDetail(t);
+    };
+    list.appendChild(li);
+  });
+  if (!r.tools || !r.tools.length) {
+    $('#mcpToolDetail').innerHTML = '<span class="muted">（未获取到 MCP 工具清单）</span>';
+  }
+}
+function renderMcpToolDetail(t) {
+  const props = (t.inputSchema && t.inputSchema.properties) || {};
+  const required = (t.inputSchema && t.inputSchema.required) || [];
+  const params = Object.keys(props).map(name => {
+    const p = props[name] || {};
+    const type = p.type || '';
+    const req = required.includes(name) ? '<b class="bad">必填</b>' : '<span class="muted">可选</span>';
+    return `<tr><td style="width:160px">${esc(name)}</td><td>${esc(type)}</td><td>${req}</td><td>${esc(p.description || '')}</td></tr>`;
+  }).join('') || '<tr><td colspan="4" class="muted">（无参数）</td></tr>';
+  $('#mcpToolDetail').innerHTML =
+    `<b>${esc(t.name)}</b><div style="margin:6px 0;white-space:pre-wrap">${esc(t.description || '')}</div>` +
+    `<b style="font-size:13px">参数</b>` +
+    `<table><thead><tr><th>名称</th><th>类型</th><th>必填</th><th>说明</th></tr></thead><tbody>${params}</tbody></table>`;
+}
+
 /* ---------- Cookie 接收状态 ---------- */
+/* ---------- Cookie 接收与查询记录（两种展示：接收 / 查询） ---------- */
+let ckMode = 'recv';
+function showCookieRecords(mode) {
+  ckMode = mode;
+  $('#ckRecvWrap').style.display = mode === 'recv' ? '' : 'none';
+  $('#ckQueryWrap').style.display = mode === 'query' ? '' : 'none';
+  $('#ckRecvTab').classList.toggle('active', mode === 'recv');
+  $('#ckQueryTab').classList.toggle('active', mode === 'query');
+  $('#cookieSummary').textContent = '';
+  if (mode === 'recv') loadReceives(); else loadCookieQueries();
+}
+async function refreshCookieRecords() {
+  if (ckMode === 'recv') await loadReceives(); else await loadCookieQueries();
+}
+function updateCkLogNote(logDir) {
+  if (!logDir) return;
+  $('#ckLogNote').textContent =
+    '说明：接收记录展示内存中最近 50 次推送；查询记录展示当天最新 50 条（从日志文件读取，服务重启不丢）。' +
+    '更早的完整记录见日志目录 ' + logDir + ' ：查询记录 cookie_query.log（每行一条JSON，每天滚动，滚动后为 cookie_query.log.年-月-日），' +
+    '推送接收记录见主日志 年-月-日.log（每天一个文件）。日志仅记录数量与 key，不记录任何 Cookie/Authorization 值';
+}
+async function loadCookieQueries() {
+  const r = await api('/api/cookies/queries');
+  updateCkLogNote(r.log_dir);
+  const list = r.queries || [];
+  $('#cookieSummary').textContent = list.length
+    ? `最近查询：${list[0].time}（${list[0].source_label}）` : '';
+  document.querySelector('#cqTable tbody').innerHTML = list.map(x => {
+    const keys = Array.isArray(x.keys) ? x.keys : [];
+    const keysHtml = keys.length
+      ? keys.map(k => `<span class="badge">${esc(String(k))}</span>`).join(' ')
+      : '<span class="muted">无</span>';
+    return `<tr><td>${esc(x.time)}</td><td>${esc(x.source_label || x.source)}</td>` +
+    `<td class="url" title="${esc(x.url)}">${esc(x.url)}</td>` +
+    `<td>${esc(x.scope || '—')}</td><td>${x.count}</td>` +
+    `<td>${x.auth_hit ? '有' : '无'}</td>` +
+    `<td><span class="badge ${x.success ? 'ok' : 'bad'}">${x.success ? '成功' : '失败'}</span></td>` +
+    `<td><button class="btn ghost cq-view" title="查看这次查询的主机、范围、Cookie的key与失败原因">查看</button></td></tr>` +
+    `<tr class="cq-detail" style="display:none"><td colspan="8" style="background:#fafbfc">` +
+    `<div class="muted">来源：${esc(x.source_label || x.source)}｜主机：${esc(x.host || '—')}｜${esc(x.scope || '')}</div>` +
+    (x.error ? `<div style="margin-top:4px;color:#b3392e">失败原因：${esc(x.error)}</div>` : '') +
+    `<div style="margin-top:4px">Cookie key：${keysHtml}</div></td></tr>`;
+  }).join('') || '<tr><td colspan="8" class="muted" style="text-align:center">（暂无查询记录）</td></tr>';
+  document.querySelectorAll('#cqTable .cq-view').forEach(btn => {
+    btn.onclick = () => {
+      const row = btn.closest('tr');
+      const detail = row.nextElementSibling;
+      if (detail && detail.classList.contains('cq-detail')) {
+        const show = detail.style.display === 'none';
+        detail.style.display = show ? '' : 'none';
+        btn.textContent = show ? '收起' : '查看';
+      }
+    };
+  });
+}
 async function loadReceives() {
   const r = await api('/api/cookies/receives');
+  updateCkLogNote(r.log_dir);
   $('#cookieSummary').textContent = `当前内存中 Cookie ${r.total} 条；最近推送：${r.last_push_time ? new Date(r.last_push_time * 1000).toLocaleString() : '从未'}`;
   document.querySelector('#recvTable tbody').innerHTML = r.receives.map(x => {
     const keys = Array.isArray(x.keys) ? x.keys : [];
@@ -1849,8 +2543,11 @@ function renderMarkdown(text) {
     tableBuf = [];
   };
   const inlineMd = s => esc(s)
+    .replace(/&lt;br\s*\/?&gt;/gi, '<br>')
     .replace(/!\[([^\]]*)\]\(([^)]+)\)/g,
       '<img src="$2" alt="$1" title="$1" style="max-width:100%;border:1px solid #d8dde3;border-radius:4px">')
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
+      '<a href="$2" target="_blank" rel="noopener">$1</a>')
     .replace(/`([^`]+)`/g, '<code>$1</code>')
     .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
   for (const line of lines) {

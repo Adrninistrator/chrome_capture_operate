@@ -56,5 +56,17 @@
     "Prefetch"
   ],
   "cdp_port": 9222,
-  "exec_timeout_sec": 300
+  "exec_timeout_sec": 300,
+  "op_event_types": [
+    "click",
+    "change",
+    "submit",
+    "keydown",
+    "route",
+    "page_load",
+    "pagehide",
+    "contextmenu",
+    "copy",
+    "paste"
+  ]
 }

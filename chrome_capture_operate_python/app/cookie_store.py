@@ -188,7 +188,9 @@ class CookieStore:
                 return None, ("没有与主机 %s 匹配的 Cookie（Chrome profile %d "
                               "未推送该网站的 Cookie，或插件未选择该编号）"
                               % (host, pid))
-            return None, "没有与主机 %s 匹配的 Cookie（插件可能尚未推送该网站的 Cookie）" % host
+            return None, ("没有与主机 %s 匹配的 Cookie（插件可能尚未推送该网站的"
+                          " Cookie；若登录态在用于抓包的 Chrome 中，可改用"
+                          " /api/cookies/cdp 实时读取）" % host)
         return self._pick_variants(matched, host), None
 
     def query_auth(self, url_or_host, profile_id=None):

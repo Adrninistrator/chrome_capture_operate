@@ -45,6 +45,29 @@ def redact(text):
     return _COOKIE.sub(_mask_cookie, text)
 
 
+class QuietDisconnectFilter(logging.Filter):
+    """客户端断开/服务退出时在途 SSE 连接的 ASGI 协议报错降噪。
+
+    uvicorn 在断连或退出关闭在途流式连接时会抛
+    "Expected ASGI message 'http.response.body'..."等协议错并
+    打印完整 traceback——无害（连接已断，无法按协议收尾），
+    降为一条 INFO 说明，避免退出日志吓人。
+    """
+    _NOISE = ("Expected ASGI message", "Unexpected ASGI message",
+              "Client has disconnected", "duplicate response")
+
+    def filter(self, record):
+        exc = record.exc_info[1] if record.exc_info else None
+        if exc is not None:
+            text = "%s: %s" % (type(exc).__name__, exc)
+            if any(k in text for k in self._NOISE):
+                logging.getLogger("app").info(
+                    "客户端连接中断（SSE 流式响应中止，退出/断连时正常"
+                    "现象），已忽略: %s", text)
+                return False
+        return True
+
+
 class RedactFilter(logging.Filter):
     def filter(self, record):
         record.msg = redact(record.getMessage())
@@ -59,6 +82,7 @@ def setup_logging():
     handler = logging.FileHandler(path, encoding="utf-8")
     handler.setFormatter(fmt)
     handler.addFilter(RedactFilter())
+    handler.addFilter(QuietDisconnectFilter())
     root = logging.getLogger()
     root.setLevel(logging.INFO)
     root.addHandler(handler)
@@ -66,6 +90,7 @@ def setup_logging():
         console = logging.StreamHandler()
         console.setFormatter(fmt)
         console.addFilter(RedactFilter())
+        console.addFilter(QuietDisconnectFilter())
         root.addHandler(console)
     return logging.getLogger("app"), path
 
@@ -79,17 +104,18 @@ def uvicorn_log_config(log_path):
     handlers = {"file": {
         "class": "logging.FileHandler", "filename": log_path,
         "encoding": "utf-8", "formatter": "default",
-        "filters": ["redact"]}}
+        "filters": ["redact", "quiet_disconnect"]}}
     use = ["file"]
     if sys.stderr is not None:
         handlers["console"] = {
             "class": "logging.StreamHandler", "formatter": "default",
-            "filters": ["redact"], "stream": "ext://sys.stderr"}
+            "filters": ["redact", "quiet_disconnect"], "stream": "ext://sys.stderr"}
         use.append("console")
     return {
         "version": 1,
         "disable_existing_loggers": False,
-        "filters": {"redact": {"()": "app.logutil.RedactFilter"}},
+        "filters": {"redact": {"()": "app.logutil.RedactFilter"},
+                    "quiet_disconnect": {"()": "app.logutil.QuietDisconnectFilter"}},
         "formatters": {"default": {
             "format": "%(asctime)s [%(levelname)s] %(name)s: %(message)s"}},
         "handlers": handlers,

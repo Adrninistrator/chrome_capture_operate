@@ -4,13 +4,13 @@
  * 推送时机：
  *  - 启动时（onStartup / onInstalled）
  *  - chrome.cookies.onChanged 变更时（节流间隔可配，默认 10 秒，最小 10 秒；
- *    间隔内累积的变更打标记，由定时 alarm 补推）
+ *    间隔内累积的变更由 flush alarm 补推）
  *  - Authorization 变化时（webRequest.onSendHeaders 观察请求头中的
  *    Authorization，观察地址先过推送范围管道，值与上次观察值不同时
  *    才标脏触发）
  *  - 定时推送（间隔可配，默认 5 分钟，最小 1 分钟）
  *
- * 变更推送的触发条件（prompt.md：仅范围内变更且值有真实差异才推）：
+ * 变更推送的触发条件（prompt 需求：仅范围内变更且值有真实差异才推）：
  *  - onChanged 回调先按 changeInfo.cookie 做范围预判——范围外变更直接
  *    忽略，连节流标记都不打；
  *  - 待推送快照与"上次成功推送的快照"（storage.session，生命周期与浏览器
@@ -40,7 +40,7 @@
  * 按批量打开相同方式依次打开。
  *
  * 会话保持（可配，storage.local.keepalive_items）：
- *  - 目标网站长时间不访问登录会话会过期，定时执行的固化脚本随之返回
+ *  - 目标网站长时间不访问登录会话会过期，定时执行的脚本随之返回
  *    未登录/401；插件按每项配置的间隔刷新 Chrome 中已打开的对应页面，
  *    以真实导航保持会话（全部 Cookie 携带、Set-Cookie 落回 Cookie 存储
  *    → onChanged → 原有节流推送，服务端零改动）；
@@ -55,7 +55,23 @@
  *    → "Service Worker"点击检查可见）：当前配置、找到的标签页（地址/
  *    活动状态）、刷新决策与结果（kaLog 统一前缀）。
  *
+ *
+ * 性能修复（2026-09-21，分析报告见 docs/chrome插件导致打开火山引擎页面
+ * 时浏览器卡死问题分析/ 目录）：打开火山引擎控制台等持续重写 cookie 的
+ * 页面时曾造成浏览器卡顿/卡死，根因三处叠加——
+ *  ① 节流基准 lastPushAt 为内存变量，MV3 SW 重启归零，孤立 cookie 变更
+ *     绕过节流立即全量推送（实测 SW 冷启动后 510ms 即触发推送）；
+ *  ② pushAll 无互斥，推送期间新到的变更各自判定可推并发执行，实测同一
+ *     秒 4~6 个并发全量推送（兽群效应，成倍放大单次推送成本）；
+ *  ③ 分区 cookie 补读按域名逐站点串行 getAll（2×域名数次 IPC，实测单次
+ *     ~3.1ms），域名多时单次推送数百 ms~秒级。
+ * 对应修复：① 持久化到 storage.session；② pushAll 互斥+排队补推一轮；
+ * ③ 空分区键一次取全（每次推送 cookie 读取降为 2 次 IPC）。
+ * 同日追加（v1.1.2）：推送 fetch 5 秒超时（AbortController，防服务端
+ * 不响应时挂死互斥锁）；getConfig 内存缓存 60 秒 + config_changed
+ * 主动失效（降低每事件 storage 读开销）。
  */
+
 const DEFAULT_TARGET = "http://127.0.0.1:33445/api/cookies/push";
 const DEFAULT_HEARTBEAT_MIN = 5;
 const DEFAULT_THROTTLE_SEC = 10;
@@ -64,8 +80,38 @@ const MIN_HEARTBEAT_MIN = 1;
 // 会话保持：新配置项默认间隔 30 分钟
 const DEFAULT_KA_INTERVAL_MIN = 30;
 
+// ---- 推送节流状态（2026-09-21 性能修复①：持久化到 storage.session）----
+// 原实现 lastPushAt 是内存变量：MV3 Service Worker 空闲 ~30 秒即被杀，
+// 重启后 lastPushAt 归 0，任何一次孤立的 cookie/Authorization 变更都会
+// 绕过节流间隔立即全量推送（实测：SW 冷启动后单次 cookie 写入 510ms
+// 即触发推送）。现改为写穿到 storage.session（会话级，浏览器重启清零，
+// 与"启动时推送"语义一致），SW 重启后先恢复再判定。
+// dirtySinceThrottle 原同为内存变量，SW 死亡会丢标记导致 flush alarm
+// 空转——已随本次修复删除：flush alarm 存在本身就代表"节流期内有变更"，
+// 到点直接补推（推送内部有 diff 检查，无真实变化时成本只是一次轻量扫描）。
+const LAST_PUSH_AT_KEY = "last_push_at";
 let lastPushAt = 0;
-let dirtySinceThrottle = false;
+let lastPushAtLoaded = false;
+
+/** 读取上次推送时间（首次访问时从 storage.session 恢复，SW 重启不归零）。 */
+async function getLastPushAt() {
+  if (!lastPushAtLoaded) {
+    const { [LAST_PUSH_AT_KEY]: t } =
+      await chrome.storage.session.get(LAST_PUSH_AT_KEY);
+    lastPushAt = typeof t === "number" ? t : 0;
+    lastPushAtLoaded = true;
+  }
+  return lastPushAt;
+}
+
+/** 写入上次推送时间（同步内存 + 异步持久化）。 */
+async function setLastPushAt(t) {
+  lastPushAt = t;
+  lastPushAtLoaded = true;
+  try {
+    await chrome.storage.session.set({ [LAST_PUSH_AT_KEY]: t });
+  } catch (e) { /* 持久化失败不影响内存值 */ }
+}
 
 // ---- 变更推送的"值比较"基准（storage.session，会话级内存）----
 // SNAPSHOT_KEY：上次成功推送的 cookie 快照（map: ckKey -> value）。
@@ -90,7 +136,7 @@ function snapshotDiffers(prev, next) {
   return false;
 }
 
-// 点击插件图标：在 Chrome 中以新标签页打开设置页面（prompt.md 页面要求，
+// 点击插件图标：在 Chrome 中以新标签页打开设置页面（prompt 需求 页面要求，
 // 不使用 popup 小窗；options.html 内部以 参数配置/推送记录/会话保持 三个 TAB 展示）
 chrome.action.onClicked.addListener(() => {
   chrome.tabs.create({ url: chrome.runtime.getURL("options.html") });
@@ -106,7 +152,20 @@ function normalizeHost(s) {
   return /^[a-z0-9][a-z0-9.-]*$/.test(h) ? h : "";
 }
 
+// ---- 配置缓存（2026-09-21 v1.1.2：TTL + config_changed 主动失效）----
+// onChanged / onSendHeaders 每个事件都会读一次配置（storage.local IPC），
+// cookie 风暴时是主要的每事件开销。改为内存缓存 60 秒；options 保存后
+// 会发 config_changed 消息立即失效——正常操作下配置变更即时生效，
+// 直接写 storage（脚本等）最迟 60 秒生效。返回同一对象引用，调用方
+// 均只读不改。
+let cfgCache = null;
+let cfgCacheAt = 0;
+const CFG_CACHE_TTL_MS = 60 * 1000;
+
 async function getConfig() {
+  if (cfgCache && Date.now() - cfgCacheAt < CFG_CACHE_TTL_MS) {
+    return cfgCache;
+  }
   const {
     push_target,
     throttle_sec,
@@ -124,7 +183,7 @@ async function getConfig() {
     "deny_list",
     "keepalive_items",
   ]);
-  return {
+  const cfg = {
     target: push_target || DEFAULT_TARGET,
     // 节流间隔：默认 10 秒，最小 10 秒（非法值回退默认）
     throttleMs: Math.max(
@@ -136,7 +195,7 @@ async function getConfig() {
       MIN_HEARTBEAT_MIN,
       parseFloat(heartbeat_min) || DEFAULT_HEARTBEAT_MIN
     ),
-    // 默认 none（全部禁止）：未配置或非法值回退 none（prompt.md：默认选择全部禁止）
+    // 默认 none（全部禁止）：未配置或非法值回退 none（prompt 需求：默认选择全部禁止）
     scope: push_scope === "all" || push_scope === "list" ? push_scope : "none",
     allow: Array.isArray(allow_list) ? allow_list.filter(Boolean) : [],
     deny: Array.isArray(deny_list) ? deny_list.filter(Boolean) : [],
@@ -152,6 +211,9 @@ async function getConfig() {
       }))
       .filter((it) => it.host),
   };
+  cfgCache = cfg;
+  cfgCacheAt = Date.now();
+  return cfg;
 }
 
 async function getTarget() {
@@ -218,51 +280,85 @@ function ckKey(c) {
 /** 读取全部 cookie（含 Partitioned 分区 cookie）。
  *  官方文档：默认情况下所有 chrome.cookies API 方法都针对"未分区"cookie
  *  运行——getAll({}) 拿不到带 Partitioned 属性的 cookie，而登录流程常以
- *  分区形式写入会话 cookie（如火山 signin 下发的 digest/userInfo，
- *  DevTools 可见但 getAll({}) 查不到）。这里先取未分区全集，再补读分区：
- *  1) 先试空分区键（部分版本等价于"全部分区"）；
- *  2) 再按候选顶级站点逐一读（分区键的 topLevelSite 无法枚举，只能按
- *     已知 cookie 域名、allow 清单及其常见 console/signin/sso 等前缀推导）。 */
-async function getAllCookiesWithPartitions(cfg) {
+ *  分区形式写入会话 cookie（如火山 signin 下发的 digest/userInfo）。
+ *
+ *  2026-09-21 性能修复③：原实现按候选顶级站点逐一补读分区——对范围内
+ *  每个唯一域名串行 2 次 getAll IPC（实测单次 ~3.1ms），域名上百时一次
+ *  推送数百 ms 到秒级，并发推送时成倍放大。实测（Chrome 154）：
+ *  getAll({ partitionKey: {} }) 一次即可返回全部 cookie（未分区 + 分区，
+ *  比逐站点枚举拿到的更全），因此逐站点枚举循环整体删除，每次推送的
+ *  cookie 读取从 2 + 2×域名数 次串行 IPC 降为 2 次。
+ *  注意：老版本 Chrome 若空分区键探测不返回分区 cookie，分区项会缺失
+ *  （原逐站点枚举同为启发式推导、覆盖也不完整）——遇到再按站点补查。 */
+async function getAllCookiesWithPartitions() {
   const base = await chrome.cookies.getAll({});
   const merged = [...base];
   const seen = new Set(base.map((c) => ckKey(c)));
-  const addAll = (list) => {
-    for (const c of list || []) {
+  // 空分区键探测：现代 Chrome 等价于"全部分区"，一步到位
+  try {
+    const extra = await chrome.cookies.getAll({ partitionKey: {} });
+    for (const c of extra || []) {
       const k = ckKey(c);
       if (!seen.has(k)) { seen.add(k); merged.push(c); }
     }
-  };
-  // 1) 空分区键探测：若实现支持"全部分区"，一步到位
-  try { addAll(await chrome.cookies.getAll({ partitionKey: {} })); }
-  catch (e) { /* 忽略 */ }
-  // 2) 候选顶级站点逐一读取（host_permissions 为 <all_urls>，无需额外授权）
-  const sites = new Set();
-  for (const c of base) {
-    if (c.domain && cookieAllowed(c, cfg)) {
-      sites.add("https://" + c.domain.replace(/^\./, "").toLowerCase());
-    }
-  }
-  for (const p of cfg.allow) {
-    const root = p.replace(/^\*\./, "").replace(/^\./, "").toLowerCase();
-    if (!root || root.includes("*")) continue; // IP 通配等无法推导前缀
-    for (const sub of ["", "www.", "console.", "signin.", "passport.",
-      "sso.", "login.", "account.", "auth.", "portal."]) {
-      sites.add("https://" + sub + root);
-    }
-  }
-  for (const site of sites) {
-    for (const pk of [{ topLevelSite: site },
-      { topLevelSite: site, hasCrossSiteAncestor: true }]) {
-      try { addAll(await chrome.cookies.getAll({ partitionKey: pk })); }
-      catch (e) { /* Chrome <119 忽略未知字段 → 重复项已被去重 */ }
-    }
-  }
+  } catch (e) { /* 老版本不支持 partitionKey：仅未分区 cookie 可见 */ }
   return merged;
 }
 
+// ---- 推送 fetch 超时（2026-09-21 v1.1.2：AbortController）----
+// 服务端不响应时推送链路不再无限挂起：挂起的推送占着互斥锁（pushInFlight），
+// 后续推送只能排队干等。超时（5 秒，本机服务足够宽裕）后 fetch 抛
+// AbortError，由 doPushAll 的 catch 兜底记为失败——快照不更新，
+// 下个触发时机自然重推。
+const FETCH_TIMEOUT_MS = 5000;
+
+async function fetchWithTimeout(url, init, timeoutMs) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: ctrl.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** 推送入口（2026-09-21 性能修复②：互斥防并发兽群）。
+ *  原实现多个触发可同刻并发执行推送（lastPushAt 在推送执行中才更新，
+ *  推送期间新到的变更事件各自判定可推）——实测同一秒 4~6 个并发全量
+ *  推送（每个都做完整 cookie 扫描 + fetch + 历史写入），页面加载时的
+ *  Set-Cookie 风暴会成倍放大开销。现改为同一时刻只允许一个推送真正
+ *  执行：推送期间到达的请求记为排队，由当前推送完成后用最新快照补推
+ *  一轮（排队者的 reason/opts 保留，手动推送仍有自己的推送记录）。
+ *  返回值 deferred:true 表示本次调用未立即执行（由在跑的推送代为补推）。 */
+let pushInFlight = false;
+let pushQueued = null;
+
 async function pushAll(reason, opts = {}) {
+  if (pushInFlight) {
+    pushQueued = { reason, opts };
+    return { success: true, count: 0, skipped: 0, deferred: true };
+  }
+  pushInFlight = true;
+  try {
+    let result = await doPushAll(reason, opts);
+    // 推送期间有新请求排队：用最新快照再推一轮（循环消化，不递归不并发；
+    // 全量快照语义下一个补推即覆盖所有排队意图，多个排队取最后一个）
+    while (pushQueued) {
+      const q = pushQueued;
+      pushQueued = null;
+      result = await doPushAll(q.reason, q.opts);
+    }
+    return result;
+  } finally {
+    pushInFlight = false;
+    pushQueued = null;
+  }
+}
+
+/** 真正执行一次全量推送（原 pushAll 主体，仅由 pushAll 互斥调用）。 */
+async function doPushAll(reason, opts = {}) {
   const cfg = await getConfig();
+
   const target = cfg.target;
   const { my_profile } = await chrome.storage.local.get("my_profile");
   const profile = parseInt(my_profile, 10) || 0;
@@ -273,7 +369,7 @@ async function pushAll(reason, opts = {}) {
   let success = false;
   let skipped = 0;
   try {
-    const all = await getAllCookiesWithPartitions(cfg);
+    const all = await getAllCookiesWithPartitions();
     cookies = all.filter((c) => {
       const ok = cookieAllowed(c, cfg);
       if (!ok) skipped += 1;
@@ -297,13 +393,12 @@ async function pushAll(reason, opts = {}) {
                  skippedNoDiff: true };
       }
     }
-    lastPushAt = Date.now();
-    dirtySinceThrottle = false;
-    const resp = await fetch(target, {
+    await setLastPushAt(Date.now());
+    const resp = await fetchWithTimeout(target, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ reason, cookies, authorizations, profile }),
-    });
+    }, FETCH_TIMEOUT_MS);
     success = resp.ok;
     // 推送成功才更新快照基准（失败的变更保留下次重推）
     if (success) {
@@ -336,7 +431,7 @@ async function pushAll(reason, opts = {}) {
            skipped };
 }
 
-/** 节流推送：距上次 >= 间隔立即推；否则打标记等补偿 */
+/** 节流推送：距上次 >= 间隔立即推；否则创建 flush alarm 等补偿 */
 // ---------- Authorization 观察（webRequest.onSendHeaders 只读） ----------
 
 /** 主机是否在推送范围内（与 cookie 同一 scope/allow/deny 管道）。
@@ -395,11 +490,14 @@ chrome.webRequest.onSendHeaders.addListener(
 
 async function pushThrottled(reason) {
   const cfg = await getConfig();
-  if (Date.now() - lastPushAt >= cfg.throttleMs) {
+  // 节流基准从 storage.session 恢复（性能修复①：SW 重启不归零，
+  // SW 冷启动后的孤立变更不再绕过节流立即全量推送）
+  if (Date.now() - (await getLastPushAt()) >= cfg.throttleMs) {
     await pushAll(reason, { checkDiff: true });
   } else {
-    dirtySinceThrottle = true;
-    // 补偿推送（alarm 实际触发可能晚于设定，由浏览器调度）
+    // 补偿推送（alarm 实际触发可能晚于设定，由浏览器调度）。
+    // alarm 的存在本身即代表节流期内有变更，到点由 alarm 处理器直接
+    // 补推（带 diff 检查）——不依赖内存标记，SW 死亡不丢语义。
     await chrome.alarms.create("flush", { delayInMinutes: 0.5 });
   }
 }
@@ -523,7 +621,7 @@ chrome.runtime.onInstalled.addListener(() => {
 });
 
 chrome.cookies.onChanged.addListener((changeInfo) => {
-  // 范围预判（prompt.md：仅范围内变更才触发）：范围外变更直接忽略，
+  // 范围预判（prompt 需求：仅范围内变更才触发）：范围外变更直接忽略，
   // 连节流标记都不打。推送前的快照 diff 由 pushAll(checkDiff) 负责。
   if (!changeInfo || !changeInfo.cookie) return;
   getConfig().then((cfg) => {
@@ -536,7 +634,9 @@ chrome.cookies.onChanged.addListener((changeInfo) => {
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === "heartbeat") {
     pushAll("定时推送");
-  } else if (alarm.name === "flush" && dirtySinceThrottle) {
+  } else if (alarm.name === "flush") {
+    // 补推不依赖内存标记（SW 死亡会丢）：flush alarm 只在节流期内有
+    // 变更时才会被创建，到点直接带 diff 补推，无真实变化成本极低
     pushAll("cookie变更(补推)", { checkDiff: true });
   } else if (alarm.name.startsWith("ka_")) {
     // 到点即刷新：周期由 alarm 保证，不计算距上次刷新的时间
@@ -857,9 +957,97 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 });
 
+// ---------- 外部消息（Web UI 按钮 → 插件动作，2026-09-22 实施设计
+// docs/chrome插件配置页网页按钮打开设计/ 方案 A）----------
+// manifest 的 externally_connectable.matches 已限制来源主机（127.0.0.1/
+// localhost 任意端口，匹配模式不含端口）；此处再校验 sender.origin 做
+// 双重防护。消息指令为 msg.type 枚举（首期 open_options，后续可扩展）。
+chrome.runtime.onMessageExternal.addListener((msg, sender, sendResponse) => {
+  if (!/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(
+      sender.origin || "")) {
+    sendResponse({ ok: false, error: "来源不允许" });
+    return;
+  }
+  if (msg && msg.type === "open_options") {
+    chrome.tabs.create({ url: chrome.runtime.getURL("options.html") });
+    sendResponse({ ok: true });
+    return;
+  }
+  // 读取当前生效配置（v1.1.4：网页修改配置能力，仅安全字段）
+  if (msg && msg.type === "get_config") {
+    getConfig().then((cfg) => {
+      sendResponse({ ok: true, config: {
+        push_scope: cfg.scope, allow_list: cfg.allow, deny_list: cfg.deny,
+        throttle_sec: cfg.throttleMs / 1000, heartbeat_min: cfg.heartbeatMin,
+      } });
+    });
+    return true;   // 异步 sendResponse
+  }
+  // 修改配置（v1.1.4）：白名单字段校验后写入，缓存立即失效并重建
+  // 周期任务（与 config_changed 同语义）
+  if (msg && msg.type === "set_config" && msg.patch
+      && typeof msg.patch === "object") {
+    try {
+      const patch = validateExternalConfig(msg.patch);
+      chrome.storage.local.set(patch, () => {
+        cfgCache = null;          // 立即失效（不走 60 秒 TTL）
+        ensureAlarms();           // 心跳/会话保持周期可能变化
+        sendResponse({ ok: true, applied: Object.keys(patch) });
+      });
+    } catch (e) {
+      sendResponse({ ok: false, error: String(e.message || e) });
+    }
+    return true;   // 异步 sendResponse
+  }
+  sendResponse({ ok: false, error: "未知指令" });
+});
+
+// 外部可改字段白名单（v1.1.4）。push_target / my_profile 刻意不开放：
+// 它们决定 cookie 推向哪里——若网页可改，任何本机页面都能把采集的
+// cookie 重定向到任意地址（劫持风险）。keepalive_items 结构复杂暂不
+// 开放，需要时再加校验。
+const EXT_CONFIG_FIELDS = ["push_scope", "allow_list", "deny_list",
+  "throttle_sec", "heartbeat_min"];
+
+/** 校验外部配置补丁（与 options.js 保存校验同语义），返回净化后的补丁。 */
+function validateExternalConfig(patch) {
+  const out = {};
+  for (const k of Object.keys(patch || {})) {
+    if (!EXT_CONFIG_FIELDS.includes(k)) {
+      throw new Error("不允许的字段: " + k);
+    }
+    const v = patch[k];
+    if (k === "push_scope") {
+      if (!["none", "list", "all"].includes(v)) {
+        throw new Error("push_scope 只能是 none/list/all");
+      }
+      out.push_scope = v;
+    } else if (k === "allow_list" || k === "deny_list") {
+      if (!Array.isArray(v) || v.some((x) => typeof x !== "string")) {
+        throw new Error(k + " 须为字符串数组");
+      }
+      out[k] = v.map((x) => x.trim()).filter(Boolean);
+    } else if (k === "throttle_sec") {
+      const n = parseInt(v, 10);
+      if (!n || n < 10) {
+        throw new Error("throttle_sec 最小 10");
+      }
+      out.throttle_sec = n;
+    } else if (k === "heartbeat_min") {
+      const n = parseFloat(v);
+      if (!n || n < 1) {
+        throw new Error("heartbeat_min 最小 1");
+      }
+      out.heartbeat_min = n;
+    }
+  }
+  return out;
+}
+
 // 配置变更：立即按新间隔重建心跳（options 保存后发消息）
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg && msg.type === "config_changed") {
+    cfgCache = null; // 配置已变更：缓存立即失效（先失效再 ensureAlarms）
     ensureAlarms();
   }
 });
