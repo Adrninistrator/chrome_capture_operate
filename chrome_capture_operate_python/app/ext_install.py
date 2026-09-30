@@ -536,6 +536,41 @@ def find_daily_pid():
 
 # ---------- 模拟点击安装（改编自 load_unpacked_extension.py） ----------
 
+def _norm_ext_dir(ext_dir):
+    """插件目录路径规范化：统一为 Windows 反斜杠形式并解析 ".."。
+
+    问题记录（docs/问题记录/问题记录-插件自动安装路径分隔符与空格-
+    20260930.md）：os.path.join 不规范化分隔符——基路径含正斜杠时
+    结果是混合分隔符（"D:/a\\b"），Chrome 的"选择扩展程序目录"对话框
+    对正斜杠/混合分隔符路径可能解析失败导致安装失败。写入对话框前
+    统一规范化（Windows 下 abspath 把 / 转成 \\ 并解析 ./.. 段、
+    转绝对路径）。含空格路径原样保留（对话框写入与后续环节均为
+    原样字符串/加引号传参，空格安全）。
+    """
+    return os.path.normpath(os.path.abspath(ext_dir))
+
+
+def _edit_value(edit):
+    """读取对话框输入框当前文本（UIA ValuePattern 优先，失败退回 texts）。"""
+    try:
+        v = edit.get_value()
+        if v is not None:
+            return v
+    except Exception:
+        pass
+    try:
+        texts = edit.texts()
+        return texts[0] if texts else ""
+    except Exception:
+        return ""
+
+
+def _dialog_text_matches(written, expect):
+    """对话框输入框内容与预期路径是否一致（normcase 大小写不敏感）。"""
+    return os.path.normcase((written or "").strip()) == \
+        os.path.normcase((expect or "").strip())
+
+
 def install_ui(ext_dir, pid=None):
     """UI 自动化在已运行的日常 Chrome 中加载已解压扩展。
 
@@ -551,6 +586,9 @@ def install_ui(ext_dir, pid=None):
     pid = pid or find_daily_pid()
     if not pid:
         return False, "未找到日常 Chrome 主进程（可先打开日常 Chrome 再试）"
+    # 路径规范化：统一反斜杠分隔符并解析 ..（正斜杠/混合分隔符路径
+    # 可能使 Chrome 目录选择框解析失败，问题记录 2026-09-30）
+    ext_dir = _norm_ext_dir(ext_dir)
     t0 = time.time()
 
     app32 = Application(backend="win32").connect(process=pid)
@@ -611,8 +649,13 @@ def install_ui(ext_dir, pid=None):
                 if cand:
                     try:
                         cand[0].set_edit_text(ext_dir)
-                        uia_dlg, written = uia, True
-                        break
+                        # 回读校验：写入内容与预期路径必须一致——路径被
+                        # 篡改（分隔符/空格/输入法）时本轮发现并重试，
+                        # 而非等 Chrome 报"目录不存在"或静默装错目录
+                        if _dialog_text_matches(_edit_value(cand[0]),
+                                                ext_dir):
+                            uia_dlg, written = uia, True
+                            break
                     except Exception:
                         pass
             except Exception:
@@ -621,7 +664,8 @@ def install_ui(ext_dir, pid=None):
             break
         time.sleep(0.12)
     if not written:
-        return False, "10 秒内没有找到可写入的路径输入框"
+        return False, ("10 秒内没有找到可写入的路径输入框，或写入的路径"
+                       "与预期不一致（%s）" % ext_dir)
     time.sleep(0.15)
 
     ok = uia_dlg.child_window(title="选择文件夹", control_type="Button")
@@ -1068,6 +1112,10 @@ def start_ui_install_task(ext_dir):
     安装成功后自动计算解压版插件 ID 并写入全局配置（需求）——
     供"Chrome插件设置"页头按钮与插件设置页使用。
     """
+    # 路径规范化（与 install_ui 同口径）：子进程命令行与插件 ID 计算
+    # 都用规范化后的路径（问题记录 2026-09-30）
+    ext_dir = _norm_ext_dir(ext_dir)
+
     def fn(log_fn):
         log_fn("程序将模拟人工点击操作日常 Chrome 完成安装（约 10 秒，请勿操作鼠标与键盘）…")
         inner = _subprocess_fn(["ui_install", ext_dir],
@@ -1197,9 +1245,9 @@ task = ExtInstallTask()
 
 
 def _default_ext_dir():
-    return os.path.join(os.path.dirname(os.path.dirname(
+    return _norm_ext_dir(os.path.join(os.path.dirname(os.path.dirname(
         os.path.abspath(__file__))), "..",
-        "chrome_capture_operate_extension")
+        "chrome_capture_operate_extension"))
 
 
 def main():
