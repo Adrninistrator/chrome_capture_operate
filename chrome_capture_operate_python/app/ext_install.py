@@ -471,6 +471,85 @@ def _type_text_ime_safe(w32, text, log_fn=None):
             _clipboard_empty()   # 原剪贴板为空：清空还原（非文本则无法恢复）
 
 
+# ---------- UI 自动化公共助手（问题记录 2026-09-30 真因修复） ----------
+
+def _paste_text_and_enter(w32, text, log_fn=None):
+    """粘贴文本到地址栏并回车。
+
+    粘贴后先沉降 0.5 秒再回车——粘贴消息未处理完时回车会落空
+    （导航不执行、页面停在新标签页；问题记录-插件自动安装失败
+    -真因定位-20260930 真因 1，实测 0 等待 0/4、0.4s 等待 4/4）。
+    """
+    _type_text_ime_safe(w32, text, log_fn=log_fn)
+    time.sleep(0.5)   # 等目标程序处理完粘贴消息
+    w32.type_keys("{ENTER}", pause=0.02)
+
+
+def _wait_exists(ctrl, timeout):
+    """轮询等待 UIA 控件出现；吞掉 COMError 等瞬时异常继续重试。
+
+    UIA 控件树构建有延迟（实测对话框刚出现只能读到 2 个控件，约 3 秒
+    后才完整），exists() 一次性判定易瞬时误判（问题记录 2026-09-30）。
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            if ctrl.exists():
+                return True
+        except Exception:
+            pass
+        time.sleep(0.3)
+    return False
+
+
+def _pick_folder_edit(edits):
+    """从文件对话框的 Edit 控件中挑选路径输入框。
+
+    问题记录 2026-09-30 真因 2：Win11 新版资源管理器风格的"选择扩展
+    程序目录"对话框中，UIA 树里前几个 Edit 是文件列表的列内联编辑框
+    （名称/修改日期/类型/大小），原"排除搜索框取第一个"会选到「名称」
+    列。优先按 name=="文件夹:" 或 auto_id=="1152"（路径框的经典
+    auto_id）精确匹配；匹配不到退回"排除搜索框"的顺序兜底。
+    """
+    edits = list(edits or [])
+    for e in edits:
+        try:
+            info = e.element_info
+        except Exception:
+            continue
+        if (getattr(info, "name", None) or "").strip() == "文件夹:":
+            return e
+        if str(getattr(info, "auto_id", "") or "") == "1152":
+            return e
+    cand = []
+    for e in edits:
+        try:
+            if "搜索" not in (e.element_info.name or ""):
+                cand.append(e)
+        except Exception:
+            continue
+    return cand[0] if cand else None
+
+
+def _close_folder_dialogs():
+    """关闭残留的"选择扩展程序目录"对话框。
+
+    安装中途失败会留下对话框，占用后续重试（问题记录 2026-09-30 遗留
+    风险 7.2）；在 install_ui 的 finally 中调用（成功时对话框已被
+    "选择文件夹"关闭，找不到即跳过，幂等）。
+    """
+    try:
+        from pywinauto import Desktop
+        for w in Desktop(backend="win32").windows(class_name="#32770"):
+            try:
+                if "选择扩展程序目录" in (w.window_text() or ""):
+                    w.close()
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
 # ---------- 定位日常 Chrome 主进程（改编自 uninstall.py） ----------
 
 def _chrome_processes():
@@ -534,6 +613,26 @@ def find_daily_pid():
     return None
 
 
+def _top_chrome_window(app32):
+    """取进程应操作的顶层窗口：跳过最小化/不可见窗口。
+
+    问题记录 2026-09-30 遗留风险 7.1：top_window() 取 EnumWindows
+    顺序首个——用户浏览窗口被最小化而管理页窗口在前时会选错，导致
+    在错误的窗口里导航、找不到按钮。全部最小化时退回第一个。
+    """
+    try:
+        wins = app32.windows()
+    except Exception:
+        return app32.top_window()
+    for w in wins:
+        try:
+            if w.is_visible() and not w.is_minimized():
+                return w
+        except Exception:
+            continue
+    return wins[0] if wins else app32.top_window()
+
+
 # ---------- 模拟点击安装（改编自 load_unpacked_extension.py） ----------
 
 def _norm_ext_dir(ext_dir):
@@ -592,15 +691,15 @@ def install_ui(ext_dir, pid=None):
     t0 = time.time()
 
     app32 = Application(backend="win32").connect(process=pid)
-    w32 = app32.top_window()
+    w32 = _top_chrome_window(app32)
     w32.set_focus()
     time.sleep(0.3)
     w32.type_keys("^t", pause=0.04)
     time.sleep(0.7)
     w32.type_keys("^l", pause=0.04)
     time.sleep(0.3)
-    _type_text_ime_safe(w32, "chrome://extensions")
-    w32.type_keys("{ENTER}", pause=0.02)
+    # 粘贴后沉降再回车（真因 1：粘贴未落定回车落空，导航不执行）
+    _paste_text_and_enter(w32, "chrome://extensions")
     time.sleep(1.2)
 
     def dialog_candidates():
@@ -614,7 +713,9 @@ def install_ui(ext_dir, pid=None):
     uia_win = Desktop(backend="uia").window(handle=w32.handle)
     btn = uia_win.child_window(title="加载未打包的扩展程序",
                                control_type="Button")
-    if not btn.exists(timeout=6):
+    # 按钮探测轮询（吞掉瞬时异常）：UIA 树构建有延迟，一次性判定易
+    # 误判（问题记录 2026-09-30）
+    if not _wait_exists(btn, 12):
         for tg in uia_win.descendants(title="开发者模式",
                                       control_type="Button"):
             try:
@@ -622,61 +723,68 @@ def install_ui(ext_dir, pid=None):
             except Exception:
                 continue
             time.sleep(1.0)
-            if btn.exists(timeout=2):
+            if _wait_exists(btn, 2):
                 break
-    if not btn.exists(timeout=6):
+    if not _wait_exists(btn, 6):
         return False, "找不到 '加载未打包的扩展程序' 按钮"
     btn.invoke()
 
-    t_dlg = time.time()
-    while time.time() - t_dlg < 3 and w32.is_enabled():
-        time.sleep(0.03)
-    deadline = time.time() + 3
-    while time.time() < deadline and not dialog_candidates():
-        time.sleep(0.1)
+    # 失败路径清理：残留的目录选择对话框会占用后续重试（问题记录
+    # 2026-09-30 遗留风险 7.2）——finally 中关闭；成功时对话框已被
+    # "选择文件夹"关闭，close 幂等找不到即跳过
+    try:
+        t_dlg = time.time()
+        while time.time() - t_dlg < 3 and w32.is_enabled():
+            time.sleep(0.03)
+        deadline = time.time() + 3
+        while time.time() < deadline and not dialog_candidates():
+            time.sleep(0.1)
 
-    uia_dlg = None
-    written = False
-    t_ed = time.time()
-    deadline = time.time() + 10
-    while time.time() < deadline:
-        for w in dialog_candidates():
-            uia = Desktop(backend="uia").window(handle=w.handle)
-            try:
-                edits = uia.descendants(control_type="Edit")
-                cand = [e for e in edits
-                        if "搜索" not in (e.element_info.name or "")]
-                if cand:
-                    try:
-                        cand[0].set_edit_text(ext_dir)
-                        # 回读校验：写入内容与预期路径必须一致——路径被
-                        # 篡改（分隔符/空格/输入法）时本轮发现并重试，
-                        # 而非等 Chrome 报"目录不存在"或静默装错目录
-                        if _dialog_text_matches(_edit_value(cand[0]),
-                                                ext_dir):
-                            uia_dlg, written = uia, True
-                            break
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-        if written:
-            break
-        time.sleep(0.12)
-    if not written:
-        return False, ("10 秒内没有找到可写入的路径输入框，或写入的路径"
-                       "与预期不一致（%s）" % ext_dir)
-    time.sleep(0.15)
+        uia_dlg = None
+        written = False
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            for w in dialog_candidates():
+                uia = Desktop(backend="uia").window(handle=w.handle)
+                try:
+                    # 精确挑选路径输入框（真因 2：Win11 新版对话框前几个
+                    # Edit 是文件列表的列内联编辑框，"排除搜索框取第一个"
+                    # 会选到「名称」列）
+                    edit = _pick_folder_edit(
+                        uia.descendants(control_type="Edit"))
+                    if edit is not None:
+                        try:
+                            edit.set_edit_text(ext_dir)
+                            # 回读校验：写入内容与预期路径必须一致——路径被
+                            # 篡改（分隔符/空格/输入法）时本轮发现并重试，
+                            # 而非等 Chrome 报"目录不存在"或静默装错目录
+                            if _dialog_text_matches(_edit_value(edit),
+                                                    ext_dir):
+                                uia_dlg, written = uia, True
+                                break
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+            if written:
+                break
+            time.sleep(0.12)
+        if not written:
+            return False, ("10 秒内没有找到可写入的路径输入框，或写入的路径"
+                           "与预期不一致（%s）" % ext_dir)
+        time.sleep(0.15)
 
-    ok = uia_dlg.child_window(title="选择文件夹", control_type="Button")
-    if not ok.exists(timeout=4, retry_interval=0.1):
-        return False, "未找到 '选择文件夹' 按钮"
-    ok.invoke()
+        ok = uia_dlg.child_window(title="选择文件夹", control_type="Button")
+        if not _wait_exists(ok, 8):
+            return False, "未找到 '选择文件夹' 按钮"
+        ok.invoke()
 
-    t_close = time.time()
-    while time.time() - t_close < 6 and not w32.is_enabled():
-        time.sleep(0.03)
-    return True, "安装完成（耗时 %.1f 秒）" % (time.time() - t0)
+        t_close = time.time()
+        while time.time() - t_close < 6 and not w32.is_enabled():
+            time.sleep(0.03)
+        return True, "安装完成（耗时 %.1f 秒）" % (time.time() - t0)
+    finally:
+        _close_folder_dialogs()
 
 
 # ---------- 程序操作Chrome重新加载政策（chrome://policy，需求指定） ----------
@@ -706,20 +814,19 @@ def reload_policy_ui(pid=None, log_fn=None, expect_present=True):
     t0 = time.time()
 
     app32 = Application(backend="win32").connect(process=pid)
-    w32 = app32.top_window()
+    w32 = _top_chrome_window(app32)
     w32.set_focus()
     time.sleep(0.3)
     w32.type_keys("^t", pause=0.04)
     time.sleep(0.7)
     w32.type_keys("^l", pause=0.04)
     time.sleep(0.3)
-    _type_text_ime_safe(w32, "chrome://policy", log_fn=_log)
-    w32.type_keys("{ENTER}", pause=0.02)
+    _paste_text_and_enter(w32, "chrome://policy", log_fn=_log)
     time.sleep(1.5)
 
     uia_win = Desktop(backend="uia").window(handle=w32.handle)
     btn = uia_win.child_window(title="重新加载政策", control_type="Button")
-    if not btn.exists(timeout=6):
+    if not _wait_exists(btn, 6):
         return False, ("chrome://policy 页未找到'重新加载政策'按钮"
                        "（Chrome 界面语言非中文时需人工操作）")
     try:
@@ -784,15 +891,14 @@ def open_extensions_ui(pid=None, log_fn=None):
     t0 = time.time()
 
     app32 = Application(backend="win32").connect(process=pid)
-    w32 = app32.top_window()
+    w32 = _top_chrome_window(app32)
     w32.set_focus()
     time.sleep(0.3)
     w32.type_keys("^t", pause=0.04)
     time.sleep(0.7)
     w32.type_keys("^l", pause=0.04)
     time.sleep(0.3)
-    _type_text_ime_safe(w32, "chrome://extensions", log_fn=_log)
-    w32.type_keys("{ENTER}", pause=0.02)
+    _paste_text_and_enter(w32, "chrome://extensions", log_fn=_log)
     time.sleep(1.0)
     return True, ("已打开 chrome://extensions（耗时 %.1f 秒，插件卡片可见）"
                   % (time.time() - t0))
@@ -850,7 +956,7 @@ def uninstall_registry(ext_id, pid=None, log_fn=None):
     _log("目标 Chrome PID: %d" % pid)
 
     app32 = Application(backend="win32").connect(process=pid)
-    w32 = app32.top_window()
+    w32 = _top_chrome_window(app32)
     uia_win = Desktop(backend="uia").window(handle=w32.handle)
 
     def navigate():
@@ -860,8 +966,7 @@ def uninstall_registry(ext_id, pid=None, log_fn=None):
         time.sleep(0.7)
         w32.type_keys("^l", pause=0.04)
         time.sleep(0.3)
-        _type_text_ime_safe(w32, "chrome://extensions", log_fn=_log)
-        w32.type_keys("{ENTER}", pause=0.02)
+        _paste_text_and_enter(w32, "chrome://extensions", log_fn=_log)
         time.sleep(2.5)
 
     def close_own_tab():

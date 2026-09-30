@@ -42,6 +42,33 @@ def find_chrome():
     return None
 
 
+def open_in_chrome(url):
+    """用日常 Chrome 打开 URL（即使 Chrome 不是默认浏览器）；找不到
+    Chrome 或启动失败时退回默认浏览器。返回是否经 Chrome 打开。
+
+    需求（prompt-Python项目.md「系统托盘」「启动后程序处理」）：
+    托盘"打开页面"/双击托盘图标与启动后自动打开页面同一行为——
+    经 chrome.exe 打开：日常 Chrome 运行中时进程转交开新标签页，
+    未运行时以默认 profile 启动即日常 Chrome。
+    """
+    import webbrowser
+    chrome = find_chrome()
+    if chrome:
+        try:
+            subprocess.Popen(
+                [chrome, url],
+                creationflags=subprocess.DETACHED_PROCESS
+                | subprocess.CREATE_NEW_PROCESS_GROUP,
+                close_fds=True)
+            log.info("已用 Chrome 打开页面: %s", url)
+            return True
+        except OSError as e:
+            log.warning("用 Chrome 打开页面失败，退回默认浏览器: %s", e)
+    webbrowser.open(url)
+    log.info("已用默认浏览器打开页面: %s", url)
+    return False
+
+
 def copy_profile(dst_root=None):
     """把日常 Chrome profile 的收藏夹/历史/用户名拷贝到抓包 profile。
 

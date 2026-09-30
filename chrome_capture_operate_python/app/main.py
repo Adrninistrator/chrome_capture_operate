@@ -5,11 +5,9 @@ start.bat 以 pythonw 启动，无控制台；错误通过日志与弹窗呈现�
 import ctypes
 import logging
 import os
-import subprocess
 import socket
 import sys
 import threading
-import webbrowser
 
 # 支持两种启动方式：
 #   python -m app.main   （start.bat 使用，推荐）
@@ -19,6 +17,7 @@ if __package__ in (None, ""):
         os.path.abspath(__file__))))
     __package__ = "app"
 
+from . import chrome_proc  # noqa: E402
 from .config import (Config, LOG_DIR, ensure_dirs,  # noqa: E402
                      ensure_auto_start)
 from .logutil import setup_logging  # noqa: E402
@@ -99,7 +98,8 @@ def build_tray_menu(port, icon, on_quit):
         pystray.Menu.SEPARATOR,
         pystray.MenuItem(
             "打开页面",
-            lambda: webbrowser.open("http://127.0.0.1:%d" % port),
+            lambda: chrome_proc.open_in_chrome(
+                "http://127.0.0.1:%d" % port),
             default=True),  # 双击托盘图标也打开页面
         pystray.MenuItem("退出", lambda: on_quit(icon)),
     )
@@ -230,14 +230,12 @@ def main():
     log.info("启动完成: http://127.0.0.1:%d (log: %s)", port, LOG_DIR)
 
     # prompt 需求"启动后程序处理"：启动后用**日常使用的 Chrome**打开
-    # Web 页面（即使 Chrome 不是默认浏览器也要用 Chrome）——经 chrome.exe
-    # 打开：日常 Chrome 运行中时进程转交开新标签页（ext_cmd 实测），
-    # 未运行时以默认 profile 启动即日常 Chrome；找不到 Chrome 时才退回
+    # Web 页面（即使 Chrome 不是默认浏览器也要用 Chrome，chrome_proc.
+    # open_in_chrome 实现，托盘"打开页面"共用）；找不到 Chrome 时才退回
     # 默认浏览器。延迟到 server.run() 之后由线程触发：uvicorn 起监听
     # 需要片刻，直接开可能连不上；线程里先探活端口再打开。
     def _open_browser_after_ready():
         import time as _time
-        from . import chrome_proc
         url = "http://127.0.0.1:%d" % port
         for _ in range(50):  # 最多等 5 秒
             try:
@@ -247,23 +245,9 @@ def main():
             except OSError:
                 _time.sleep(0.1)
         try:
-            chrome = chrome_proc.find_chrome()
-            if chrome:
-                subprocess.Popen(
-                    [chrome, url],
-                    creationflags=subprocess.DETACHED_PROCESS
-                    | subprocess.CREATE_NEW_PROCESS_GROUP,
-                    close_fds=True)
-                log.info("已用 Chrome 打开页面: %s", url)
-            else:
-                webbrowser.open(url)
-                log.info("Chrome 未找到，已用默认浏览器打开页面: %s", url)
+            chrome_proc.open_in_chrome(url)
         except Exception as e:  # 打开失败不影响服务运行
             log.warning("自动打开浏览器失败: %s", e)
-            try:
-                webbrowser.open(url)
-            except Exception:
-                pass
 
     threading.Thread(target=_open_browser_after_ready, daemon=True).start()
 
