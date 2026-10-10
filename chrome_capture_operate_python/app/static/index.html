@@ -298,7 +298,8 @@ button.btn.chrome-top:disabled { background: #ccd3da; color: #f4f6f8; cursor: de
       <div class="list" id="pyList" style="margin:8px 0; max-height:180px"></div>
       <div class="row">
         <button class="btn" id="btnRun" disabled title="执行选中的py脚本（不传参，使用项目虚拟环境）">执行</button>
-        <button class="btn warn" id="btnKill" style="display:none" title="强制结束正在执行的py脚本进程">结束进程</button>
+        <button class="btn" id="btnRunMulti" disabled title="弹出窗口输入执行次数（最多1000次），确认后依次执行多次（每次执行完毕后再开始下一次）">执行多次</button>
+        <button class="btn warn" id="btnKill" style="display:none" title="强制结束正在执行的py脚本进程；执行多次时同时中止后续次数">结束进程</button>
         <span id="execState" class="muted"></span>
       </div>
       <pre id="execOut" style="margin-top:10px"></pre>
@@ -439,11 +440,29 @@ button.btn.chrome-top:disabled { background: #ccd3da; color: #f4f6f8; cursor: de
 <script>
 const $ = s => document.querySelector(s);
 let curSession = null, curScript = null, execId = null, execTimer = null, curCaptureSession = null, histRecords = [], curScriptDir = null;
+let execDone = null, multiRun = null, execPrefix = '';
+/* 执行/执行多次按钮的启用状态：选中脚本即可执行；执行多次期间
+   （multiRun）与任何一次执行进行中（execTimer）不允许再开始多次执行 */
+function updateRunButtons() {
+  $('#btnRun').disabled = !curScript;
+  $('#btnRunMulti').disabled = !curScript || !!multiRun || !!execTimer;
+}
 
 /* ---------- 基础 ---------- */
 async function api(path, opt) {
   const r = await fetch(path, opt ? {headers: {'Content-Type': 'application/json'}, ...opt} : undefined);
-  return r.json();
+  let data = null;
+  try { data = await r.json(); }
+  catch (e) { data = null; }   // 非 JSON 响应（如未捕获异常的 500 纯文本）
+  if (data === null || (!r.ok && data.error === undefined)) {
+    // 兜底为 {error}：调用方按既有错误路径提示，避免未捕获 SyntaxError
+    //（问题记录-自启动配置失败：500 text/plain 时 r.json() 抛错且无提示）
+    const reason = data === null
+      ? (r.ok ? '响应内容不是有效JSON' : `HTTP ${r.status}（响应非JSON）`)
+      : `HTTP ${r.status}`;
+    return {error: `请求失败：${reason}`};
+  }
+  return data;
 }
 function toast(el, msg, bad) { el.textContent = msg; el.style.color = bad ? '#b3392e' : '#187a3c'; setTimeout(() => el.textContent = '', 5000); }
 /* 非模态 toast 提示（弹窗提示要求：不用模态窗口，不阻塞网页操作） */
@@ -1870,13 +1889,13 @@ async function loadScripts() {
       `<span class="badge ${f.kind}">${f.kind}</span> ${esc(f.path.split(/[\\/]/).pop())}` +
       ` <span class="muted" style="float:right">${esc(f.mtime || '')}</span>` +
       (f.kind === 'py' ? ' <button class="link ftray" title="将该脚本添加到系统托盘快速执行脚本菜单（托盘菜单点击即在新控制台窗口执行）">添加到托盘菜单</button>' : '') + (f.kind === 'py' ? ' <button class="link fview" title="查看该py脚本内容（语法高亮）">查看</button>' : '') + `</div>`).join('');
-    curScript = null; $('#btnRun').disabled = true;
+    curScript = null; updateRunButtons();
     if (pys.length === 1) {
       // 只有一个 .py：直接可执行，无需手选
       const item = $('#pyList .item[data-kind=py]');
       item.classList.add('sel');
       curScript = item.dataset.p;
-      $('#btnRun').disabled = false;
+      updateRunButtons();
       $('#pyHint').textContent = '';
     } else if (pys.length > 1) {
       // 多个 .py：提示先选中
@@ -1892,7 +1911,7 @@ async function loadScripts() {
       } else {
         pe.onclick = () => {
           $('#pyList').querySelectorAll('.item').forEach(x => x.classList.remove('sel'));
-          pe.classList.add('sel'); curScript = pe.dataset.p; $('#btnRun').disabled = false;
+          pe.classList.add('sel'); curScript = pe.dataset.p; updateRunButtons();
           if (pys.length > 1) $('#pyHint').textContent = '';
         };
         const ftrayBtn = pe.querySelector('.ftray');
@@ -1960,30 +1979,91 @@ $('#btnDelScriptDir').onclick = async () => {
   toastMsg(`已删除脚本子目录 ${name}`, 'ok');
   curScriptDir = null; curScript = null;
   $('#btnDelScriptDir').disabled = true;
-  $('#btnRun').disabled = true;
+  updateRunButtons();
   $('#pyList').innerHTML = ''; $('#pyHint').textContent = '';
   $('#execOut').textContent = ''; $('#execState').textContent = '';
   loadScripts();
 };
 $('#btnRun').onclick = async () => {
-  const r = await api('/api/scripts/run', {method: 'POST', body: JSON.stringify({path: curScript})});
-  if (r.error) { toastMsg(r.error, 'err'); return; }
-  execId = r.exec_id;
-  $('#execOut').textContent = ''; $('#btnKill').style.display = 'none';
-  $('#execState').textContent = '执行中…';
-  execTimer = setInterval(pollExec, 1000); pollExec();
+  execPrefix = '';
+  await startExecOnce();
 };
+/* 单次执行：启动 + 轮询，Promise 在执行结束时 resolve（结果 dict）；
+   启动失败 resolve(null)。执行多次（runMulti）顺序 await 复用本函数 */
+function startExecOnce() {
+  return new Promise(resolve => {
+    api('/api/scripts/run', {method: 'POST', body: JSON.stringify({path: curScript})}).then(r => {
+      if (r.error) { toastMsg(r.error, 'err'); resolve(null); return; }
+      execId = r.exec_id; execDone = resolve;
+      $('#btnKill').style.display = 'none';
+      $('#execState').textContent = '执行中…';
+      execTimer = setInterval(pollExec, 1000); pollExec();
+      updateRunButtons();
+    });
+  });
+}
 async function pollExec() {
   const r = await api('/api/exec/' + execId);
-  $('#execOut').textContent = (r.stdout || '') + (r.stderr ? '\n--- stderr ---\n' + r.stderr : '');
+  const out = (r.stdout || '') + (r.stderr ? '\n--- stderr ---\n' + r.stderr : '');
+  // 执行多次时：输出区前缀保留已完成次数的输出，其后为当前次的实时输出
+  $('#execOut').textContent = execPrefix + out;
   $('#execOut').scrollTop = $('#execOut').scrollHeight;
   if (r.timed_out && r.running) { $('#execState').textContent = '执行超时（进程仍在运行）'; $('#btnKill').style.display = ''; }
   if (!r.running) {
-    clearInterval(execTimer); $('#btnKill').style.display = 'none';
+    clearInterval(execTimer); execTimer = null; $('#btnKill').style.display = 'none';
     $('#execState').textContent = `结束：exit=${r.exit_code}${r.timed_out ? '（超时）' : ''}${r.killed ? '（已终止）' : ''} 耗时${r.elapsed_ms}ms`;
+    const done = execDone; execDone = null;
+    if (done) done(r);
+    updateRunButtons();
   }
 }
 $('#btnKill').onclick = async () => { await api(`/api/exec/${execId}/kill`, {method: 'POST'}); $('#btnKill').style.display = 'none'; };
+
+/* ---------- 执行多次（需求：输入次数最多1000次，确认后依次执行） ---------- */
+$('#btnRunMulti').onclick = () => {
+  $('#popTitle').textContent = '执行多次';
+  $('#popBody').innerHTML =
+    '<div style="font-size:13px;line-height:1.9">' +
+    '<div>即将执行：<b>' + esc(curScript ? curScript.split(/[\\/]/).slice(-2).join('/') : '') + '</b></div>' +
+    '<div style="margin-top:10px">执行次数 <input type="number" id="mrCount" min="1" max="1000" value="2" style="width:90px" title="连续执行的次数（1~1000，整数）"> 次（最多 1000 次；依次执行，每次执行完毕后再开始下一次，输出按次分段展示）</div>' +
+    '<div class="muted" style="margin-top:6px">执行过程中点击"结束进程"会终止当前次并中止后续次数</div>' +
+    '<div class="row" style="margin-top:14px"><button class="btn" id="mrStart" title="按输入的次数依次执行脚本">开始执行</button>' +
+    '<button class="btn" id="mrCancel" title="取消并关闭窗口，不开始执行">取消</button></div></div>';
+  $('#overlay').style.display = 'block';
+  $('#mrCancel').onclick = closePop;
+  $('#mrStart').onclick = async () => {
+    const n = parseInt($('#mrCount').value, 10);
+    if (!(n >= 1 && n <= 1000)) { toastMsg('执行次数需为 1~1000 的整数', 'err'); return; }
+    closePop();
+    await runMulti(n);
+  };
+};
+async function runMulti(total) {
+  multiRun = {total, done: 0, ok: 0, bad: 0, timeout: 0, killed: 0};
+  execPrefix = '';
+  $('#execOut').textContent = '';
+  updateRunButtons();
+  for (let i = 1; i <= total; i++) {
+    $('#execState').textContent = `第 ${i}/${total} 次执行中…`;
+    execPrefix += `===== 第 ${i}/${total} 次执行 =====\n`;
+    const r = await startExecOnce();
+    if (!r) { execPrefix += '（启动失败，中止后续执行）\n'; break; }
+    multiRun.done = i;
+    if (r.killed) multiRun.killed++;
+    else if (r.timed_out) multiRun.timeout++;
+    else if (r.exit_code === 0) multiRun.ok++;
+    else multiRun.bad++;
+    // 本次最终输出并入前缀，后续次数的输出接在其后（分段展示）
+    execPrefix += (((r.stdout || '') + (r.stderr ? '\n--- stderr ---\n' + r.stderr : '')).replace(/\s*$/, '\n'));
+    if (r.killed) { execPrefix += '（已终止，中止后续执行）\n'; break; }
+  }
+  $('#execOut').textContent = execPrefix;
+  $('#execOut').scrollTop = $('#execOut').scrollHeight;
+  const m = multiRun;
+  $('#execState').textContent = `多次执行结束：共执行 ${m.done}/${total} 次，成功 ${m.ok}、失败 ${m.bad}、超时 ${m.timeout}、终止 ${m.killed}`;
+  multiRun = null;
+  updateRunButtons();
+}
 
 /* ---------- 定时执行脚本 ---------- */
 const WD_NAMES = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
@@ -2078,6 +2158,7 @@ async function showSchedForm(task) {
     '<div id="sfWindows"></div>' +
     '<button class="link" id="sfAddWindow" title="添加一个允许执行的时间段（起止 时:分:秒）">添加时间段</button>' +
     '<span class="muted">起止可跨零点（如 22:00:00 ~ 06:00:00）；调度点落在任一时间段内才执行</span></div></div>' +
+    '<div class="row" style="margin-top:10px;font-size:13px">执行日志保留天数 <input type="number" id="sfLogKeep" min="1" max="3650" value="30" style="width:80px" title="超过该天数的执行日志会被自动删除（每次执行完毕与服务启动时清理）"> 天 <span class="muted">超过后删除对应的执行日志，默认 30</span></div>' +
     '<div class="row" style="padding:6px 0"><button class="btn" id="sfSave" title="保存该定时任务（新增后默认启动）">保存</button>' +
     '<button class="btn" id="sfCancel" title="取消并关闭表单">取消</button>' +
     '<span class="muted">新增后默认启动；编辑保存后按新的定时方式计算下次执行</span></div>';
@@ -2142,6 +2223,7 @@ async function showSchedForm(task) {
     const own = withPy.find(s => (task.script_path || '').startsWith(s.dir + '\\') ||
                                   (task.script_path || '').startsWith(s.dir + '/'));
     if (own) { $('#sfDir').value = own.dir; fillPy(own.dir); $('#sfPy').value = task.script_path; }
+    $('#sfLogKeep').value = task.log_retention_days || 30;
     const sch = task.schedule || {};
     const type = sch.type === 'interval' ? 'interval' : 'at';
     document.querySelector(`input[name=sfType][value=${type}]`).checked = true;
@@ -2212,8 +2294,10 @@ async function showSchedForm(task) {
         schedule.time_windows = time_windows;
       }
     }
+    const log_keep = parseInt($('#sfLogKeep').value, 10);
+    if (!(log_keep >= 1 && log_keep <= 3650)) { toastMsg('执行日志保留天数需为 1~3650 的整数', 'err'); return; }
     const opt = {method: task ? 'PUT' : 'POST',
-                 body: JSON.stringify({script_path, schedule})};
+                 body: JSON.stringify({script_path, schedule, log_retention_days: log_keep})};
     const url = task ? `/api/schedules/${task.id}` : '/api/schedules';
     const res = await api(url, opt);
     if (res.error) { toastMsg(res.error, 'err', 6000); return; }
@@ -2257,11 +2341,16 @@ async function showSchedLogs(t) {
         `<td>${fmtSize(x.size)}</td><td>${esc(tstr)}</td><td></td>`;
       tr.onclick = () => viewSchedLog(x.path, render);
       const td = tr.lastChild;
+      // 需求：整行可单击查看，同时每行展示文字按钮以告知用户
+      const vw = document.createElement('button');
+      vw.className = 'link'; vw.textContent = '查看';
+      vw.title = '查看该执行日志的具体内容（整行也可单击打开）';
+      vw.onclick = ev => { ev.stopPropagation(); viewSchedLog(x.path, render); };
       const cp = document.createElement('button');
       cp.className = 'link'; cp.textContent = '复制路径';
       cp.title = '复制该日志文件的完整路径';
       cp.onclick = ev => { ev.stopPropagation(); copyText(x.path); };
-      td.appendChild(cp);
+      td.append(vw, cp);
       tbody.appendChild(tr);
     });
     $('#logFilter').onclick = render;
@@ -2331,6 +2420,7 @@ async function saveConf() {
     type_filter: $('#cfgTypeFilter').value.split('\n').map(s => s.trim()).filter(Boolean),
     cdp_port: +$('#cfgCdp').value, exec_timeout_sec: +$('#cfgTimeout').value,
     op_event_types: opTypes})});
+  if (r.error) { toast($('#confMsg'), '保存失败：' + r.error, true); return; }
   toast($('#confMsg'), r.ok ? '已保存。' + (r.note || '') : '保存失败', !r.ok);
 }
 

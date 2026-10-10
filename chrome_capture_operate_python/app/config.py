@@ -115,11 +115,25 @@ class Config:
                 pass  # 配置文件损坏时使用默认值
 
     def save(self):
+        """写 conf.json；失败返回 False 而非抛异常。
+
+        运行期写被拒（文件被编辑器/其他实例以不共享写的模式占用、
+        或被安全软件拦截——[Errno 13] 在 Windows 上两种含义都对应）
+        时记录警告并返回 False：参数已在内存生效，调用方按需提示
+        "重启后回退"，不把整条保存链路拖垮（docs/问题记录/自启动
+        配置失败-分析报告.md 根因）。
+        """
         os.makedirs(CONF_DIR, exist_ok=True)
         with self._lock:
             data = dict(self._data)
-        with open(CONF_PATH, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        try:
+            with open(CONF_PATH, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            return True
+        except OSError as e:
+            logging.getLogger("app").warning(
+                "保存 conf.json 失败（文件被占用或写入被拦截）: %s", e)
+            return False
 
     def get(self, key, default=None):
         with self._lock:
@@ -133,19 +147,31 @@ class Config:
         """仅允许更新已知字段。
 
         auto_start 不进 conf.json：参数值写全局配置文件，并同步注册表。
-        返回 None（无 auto_start）或 {"auto_start_registry_ok": bool}。
+        返回 {"conf_saved": bool}（无 auto_start），或 {"conf_saved": bool,
+        "auto_start_registry_ok": bool}（含 auto_start）。
+
+        写入策略（问题记录-自启动配置失败）：conf 字段**无变化时不写
+        conf.json**——只改 auto_start 时完全不依赖 conf.json（此前无条件
+        save()，conf.json 被占用时把注册表那步挡在前面，自启动永远写
+        不上）；conf 写失败也不阻断 auto_start（全局配置与注册表通道
+        独立），参数仅在内存生效（conf_saved=False，重启后回退）。
         """
         with self._lock:
+            changed = False
             for k, v in kwargs.items():
-                if k in DEFAULTS:
+                if k in DEFAULTS and self._data.get(k) != v:
                     self._data[k] = v
-        self.save()
+                    changed = True
+        conf_saved = True
+        if changed:
+            conf_saved = self.save()
         if "auto_start" in kwargs:
             v = bool(kwargs["auto_start"])
             globalconf.set_value(globalconf.KEY_AUTO_START,
                                  "true" if v else "false")
-            return {"auto_start_registry_ok": set_auto_start(v)}
-        return None
+            return {"conf_saved": conf_saved,
+                    "auto_start_registry_ok": set_auto_start(v)}
+        return {"conf_saved": conf_saved}
 
 
 def _pythonw():

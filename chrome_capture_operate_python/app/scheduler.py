@@ -12,6 +12,8 @@
 
 执行日志写到 log/scripts/{脚本所在子目录名}/{当前年份}/{脚本文件名}_{执行时间}.log，
 每次执行生成单独的日志文件（stdout/stderr 逐行写入，含起止/退出码/耗时）。
+执行日志按任务配置的保留天数（log_retention_days，默认 30 天）超期自动删除
+（服务启动与每次执行完毕时清理，按文件修改时间判断）。
 
 调度语义：每秒 tick 一次，计算每个启动中任务的"<= 当前时刻的最近一次调度点"，
 若该点晚于上次已触发的调度点（last_fired）且落在允许时间段内则触发——错过
@@ -35,6 +37,27 @@ from .executor import venv_python, validate_script_path
 log = logging.getLogger("app.sched")
 
 WEEKDAY_NAMES = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+
+# 执行日志保留天数（任务级字段 log_retention_days，需求"定时执行脚本-
+# 编辑-执行日志保留天数"）：默认 30 天，超过时删除对应的执行日志
+DEFAULT_LOG_RETENTION_DAYS = 30
+MAX_LOG_RETENTION_DAYS = 3650
+
+
+def validate_log_retention_days(days):
+    """校验执行日志保留天数；None/空串按默认值 30。
+
+    返回 (天数, 错误)：合法时错误为 None；非法时天数为 None。
+    """
+    if days is None or days == "":
+        return DEFAULT_LOG_RETENTION_DAYS, None
+    try:
+        d = int(days)
+    except (TypeError, ValueError):
+        return None, "执行日志保留天数需为 1~%d 的整数" % MAX_LOG_RETENTION_DAYS
+    if d < 1 or d > MAX_LOG_RETENTION_DAYS:
+        return None, "执行日志保留天数需为 1~%d 的整数" % MAX_LOG_RETENTION_DAYS
+    return d, None
 
 
 def _fmt(dt):
@@ -328,6 +351,14 @@ class Scheduler:
             self._results = {k: v for k, v in
                              (data.get("results") or {}).items()
                              if k in self.tasks}
+        # 服务启动时清理各任务超期执行日志（暂停的任务也能被清理；
+        # load 仅在 __init__ 调用一次，无重复开销）
+        for task in list(self.tasks.values()):
+            try:
+                self._cleanup_old_logs(task)
+            except Exception as e:
+                log.warning("启动清理执行日志失败（任务 %s）: %s",
+                            task.get("id"), e)
 
     def save(self):
         with self._lock:
@@ -359,16 +390,20 @@ class Scheduler:
             out.append(t)
         return out
 
-    def add(self, script_path, schedule):
+    def add(self, script_path, schedule, log_retention_days=None):
         err = validate_schedule(schedule)
         if err:
             return None, err
         p = validate_script_path(script_path)
         if not p:
             return None, "脚本不存在或不在允许的脚本目录内"
+        days, err = validate_log_retention_days(log_retention_days)
+        if err:
+            return None, err
         task = {"id": uuid.uuid4().hex[:8],
                 "script_path": p,
                 "schedule": schedule,
+                "log_retention_days": days,   # 执行日志保留天数（默认30）
                 "enabled": True,   # 新增后默认启动
                 "created_at": _fmt(datetime.now())}
         now = _fmt(datetime.now())
@@ -379,7 +414,7 @@ class Scheduler:
         self.save()
         return task, None
 
-    def update(self, tid, script_path, schedule):
+    def update(self, tid, script_path, schedule, log_retention_days=None):
         with self._lock:
             task = self.tasks.get(tid)
         if not task:
@@ -390,14 +425,66 @@ class Scheduler:
         p = validate_script_path(script_path)
         if not p:
             return None, "脚本不存在或不在允许的脚本目录内"
+        # 保留天数：显式传值则更新校验后的值；未传（None）保持任务原值
+        # （旧任务无该字段时按默认值 30 落地）
+        if log_retention_days is None:
+            days = task.get("log_retention_days",
+                            DEFAULT_LOG_RETENTION_DAYS)
+        else:
+            days, err = validate_log_retention_days(log_retention_days)
+            if err:
+                return None, err
         now = _fmt(datetime.now())
         with self._lock:
             task["script_path"] = p
             task["schedule"] = schedule
+            task["log_retention_days"] = days
             # 编辑后重置触发基准：只触发未来的调度点
             self.last_fired[tid] = now
         self.save()
         return task, None
+
+    # ---------- 执行日志保留天数（超期清理） ----------
+    def _cleanup_old_logs(self, task):
+        """删除该任务超过保留天数的执行日志（需求：执行日志保留天数）。
+
+        按日志文件修改时间判断（日志写入完成于执行结束时刻，语义即
+        "日志生成时间"）；保留天数非法/缺失按默认 30。仅扫描本任务
+        脚本对应的 log/scripts/{子目录}/ 目录。返回删除的文件数。
+        调用时机：服务启动（load）与每次执行完毕（_fire）。
+        """
+        try:
+            days = int(task.get("log_retention_days")
+                       or DEFAULT_LOG_RETENTION_DAYS)
+        except (TypeError, ValueError):
+            days = DEFAULT_LOG_RETENTION_DAYS
+        if days < 1:
+            return 0
+        cutoff = time.time() - days * 86400
+        subdir = os.path.basename(os.path.dirname(
+            os.path.abspath(task["script_path"])))
+        root = os.path.join(self.log_root, subdir)
+        if not os.path.isdir(root):
+            return 0
+        removed = 0
+        for year in os.listdir(root):
+            ydir = os.path.join(root, year)
+            if not os.path.isdir(ydir):
+                continue
+            for name in os.listdir(ydir):
+                if not name.endswith(".log"):
+                    continue
+                fp = os.path.join(ydir, name)
+                try:
+                    if os.path.getmtime(fp) < cutoff:
+                        os.remove(fp)
+                        removed += 1
+                except OSError:
+                    continue
+        if removed:
+            log.info("定时任务 %s 清理超期执行日志（保留%d天）: 删除 %d 个",
+                     task.get("id"), days, removed)
+        return removed
 
     def delete(self, tid):
         with self._lock:
@@ -561,6 +648,11 @@ class Scheduler:
         log.info("定时任务 %s 执行完成: %s result=%s exit=%s 耗时%dms",
                  tid, script, result, proc.returncode, elapsed)
         self._set_result(tid, started, result)
+        # 执行完毕清理该任务超期的执行日志（执行日志保留天数，需求）
+        try:
+            self._cleanup_old_logs(task)
+        except Exception as e:
+            log.warning("清理执行日志失败（任务 %s）: %s", tid, e)
 
     def _set_result(self, tid, started_ts, result):
         with self._lock:

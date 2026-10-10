@@ -9,6 +9,8 @@
 - 实时滚动显示 stdout/stderr（stderr 前缀标记）；
 - 脚本执行完毕后窗口保留（需求），标题显示"已完成+退出码"，用户
   手动关闭；窗口右上角关闭即结束（脚本仍在跑则先终止进程）；
+- 窗口内提供"执行"按钮（需求）：点击后清空输出并重新执行，仅当前
+  次执行结束后可用（执行期间禁用）；打开窗口即自动执行第一次；
 - 每次托盘点击开新窗口（独立进程跑 Tk，主程序 pythonw 无影响）。
 
 窗口以独立进程运行（python -m app.script_window -- 脚本路径）：
@@ -48,7 +50,12 @@ def launch(script_path):
 
 
 def _run_in_window(script_path):
-    """窗口进程入口：Tk 窗口 + 后台线程跑脚本实时回填。"""
+    """窗口进程入口：Tk 窗口 + 后台线程跑脚本实时回填。
+
+    窗口内提供"执行"按钮（需求：点击后清空窗口显示的执行日志并
+    重新执行；仅当前次脚本执行结束后才允许再次执行——执行期间
+    按钮禁用）。打开窗口即自动执行第一次。
+    """
     import tkinter as tk
     from tkinter import scrolledtext
 
@@ -64,17 +71,15 @@ def _run_in_window(script_path):
     bar = tk.Frame(root)
     bar.pack(fill=tk.X, padx=8, pady=(8, 0))
     tk.Label(bar, textvariable=status, fg="#444").pack(side=tk.LEFT)
+    run_btn = tk.Button(bar, text="执行", state=tk.DISABLED)
+    run_btn.pack(side=tk.RIGHT)
 
     text = scrolledtext.ScrolledText(
         root, wrap=tk.WORD, font=("Consolas", 10), state=tk.DISABLED,
         bg="#111318", fg="#d8dee9")
     text.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
 
-    proc = subprocess.Popen(
-        [_venv_python(), "-u", script_path],
-        cwd=os.path.dirname(script_path), env=ENV,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        creationflags=subprocess.CREATE_NO_WINDOW)
+    cur = {"proc": None}   # 当前执行中的子进程（关窗时终止用）
 
     def append(s):
         # 线程安全：Tk 的 insert 经 after 投递到主循环
@@ -95,26 +100,54 @@ def _run_in_window(script_path):
             append(prefix + line)
         stream.close()
 
-    def worker():
-        t_out = threading.Thread(target=drain, args=(proc.stdout,),
-                                 daemon=True)
-        t_err = threading.Thread(target=drain, args=(proc.stderr, "[stderr] "),
-                                 daemon=True)
-        t_out.start()
-        t_err.start()
-        code = proc.wait()
-        t_out.join(timeout=3)
-        t_err.join(timeout=3)
-        # 执行完毕：窗口保留（需求），状态栏提示退出码
-        append("\n[执行完毕，退出码 %s。窗口可关闭]\n" % code)
-        root.after(0, lambda: status.set(
-            "已完成（退出码 %s）——输出保留，关闭窗口即结束" % code))
+    def start_run():
+        """清空输出并（重新）执行脚本；执行期间"执行"按钮禁用。"""
+        run_btn.config(state=tk.DISABLED)
+        status.set("运行中…")
+        # 清空上次的执行日志（需求：点击后清空窗口显示的执行日志）
+        def _clear():
+            text.config(state=tk.NORMAL)
+            text.delete("1.0", tk.END)
+            text.config(state=tk.DISABLED)
+        root.after(0, _clear)
+        proc = subprocess.Popen(
+            [_venv_python(), "-u", script_path],
+            cwd=os.path.dirname(script_path), env=ENV,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            creationflags=subprocess.CREATE_NO_WINDOW)
+        cur["proc"] = proc
 
-    threading.Thread(target=worker, daemon=True).start()
+        def worker():
+            t_out = threading.Thread(target=drain, args=(proc.stdout,),
+                                     daemon=True)
+            t_err = threading.Thread(target=drain,
+                                     args=(proc.stderr, "[stderr] "),
+                                     daemon=True)
+            t_out.start()
+            t_err.start()
+            code = proc.wait()
+            t_out.join(timeout=3)
+            t_err.join(timeout=3)
+            # 执行完毕：窗口保留（需求），状态栏提示退出码；
+            # "执行"按钮恢复可用（仅执行结束后允许重新执行）
+            append("\n[执行完毕，退出码 %s。可点“执行”重新执行，"
+                   "或关闭窗口]\n" % code)
+
+            def _done():
+                status.set("已完成（退出码 %s）——输出保留，可点“执行”"
+                           "重新执行，关闭窗口即结束" % code)
+                run_btn.config(state=tk.NORMAL)
+            root.after(0, _done)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    run_btn.config(command=start_run)
+    start_run()   # 打开窗口即执行第一次
 
     def on_close():
         # 脚本仍在跑：用户关窗视作放弃执行，终止进程
-        if proc.poll() is None:
+        proc = cur["proc"]
+        if proc is not None and proc.poll() is None:
             proc.kill()
         root.destroy()
 

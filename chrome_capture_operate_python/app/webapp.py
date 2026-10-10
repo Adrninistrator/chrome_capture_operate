@@ -1338,17 +1338,20 @@ def create_app(tray_on_change=None, tray_notify=None):
     class ScheduleBody(BaseModel):
         script_path: str
         schedule: dict
+        log_retention_days: int = None   # 执行日志保留天数（默认30，超期删除）
 
     @app.post("/api/schedules")
     async def schedules_add(body: ScheduleBody):
-        task, err = scheduler.add(body.script_path, body.schedule)
+        task, err = scheduler.add(body.script_path, body.schedule,
+                                  body.log_retention_days)
         if err:
             return JSONResponse({"error": err}, status_code=400)
         return {"ok": True, "task": task}
 
     @app.put("/api/schedules/{sid}")
     async def schedules_update(sid: str, body: ScheduleBody):
-        task, err = scheduler.update(sid, body.script_path, body.schedule)
+        task, err = scheduler.update(sid, body.script_path, body.schedule,
+                                     body.log_retention_days)
         if err:
             return JSONResponse({"error": err},
                                 status_code=404 if err == "任务不存在"
@@ -1422,13 +1425,28 @@ def create_app(tray_on_change=None, tray_notify=None):
     @app.put("/api/config")
     async def put_conf(body: ConfBody):
         updates = {k: v for k, v in body.dict().items() if v is not None}
-        res = config.update(**updates)
+        # 异常兜底（问题记录-自启动配置失败）：不把异常冒泡成 500 纯文本
+        #（前端 api() 对非 JSON 响应会解析失败），统一返回带 error 的 JSON
+        try:
+            res = config.update(**updates)
+        except Exception as e:
+            log.exception("修改配置异常")
+            return JSONResponse({"ok": False, "error": "修改配置失败：%s" % e},
+                                status_code=500)
         note = ("监听端口与 CDP 端口修改后需重启 Python 脚本生效；"
                 "修改监听端口后需同步修改 Chrome 插件 "
                 "chrome_capture_operate_extension 中的推送目标地址")
-        if res and not res.get("auto_start_registry_ok"):
-            note = ("警告：开机自启动注册表写入失败，参数已保存，"
-                    "重启程序后将自动重试。" + note)
+        warns = []
+        if not res.get("conf_saved"):
+            warns.append("conf.json 写入失败（文件被占用或被安全软件拦截），"
+                         "参数已在当前运行的服务中生效，重启后将回退到"
+                         "修改前的值")
+        if ("auto_start_registry_ok" in res
+                and not res["auto_start_registry_ok"]):
+            warns.append("开机自启动注册表写入失败，参数已保存，重启程序"
+                         "后将自动重试")
+        if warns:
+            note = "警告：" + "；".join(warns) + "。" + note
         return {"ok": True, "note": note}
 
     @app.get("/api/ai_prompt")

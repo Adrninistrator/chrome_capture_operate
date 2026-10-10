@@ -451,8 +451,20 @@ def create_mcp_server(config, capture, store, executor):
             "auto_start": auto_start}.items() if v is not None}
         if not updates:
             return {"ok": False, "error": "未提供任何配置字段"}
-        config.update(**updates)
-        return {"ok": True, "config": await get_config()}
+        try:
+            res = config.update(**updates)
+        except Exception as e:
+            return {"ok": False, "error": "修改配置失败：%s" % e}
+        if not res.get("conf_saved"):
+            return {"ok": False, "error": (
+                "conf.json 写入失败（文件被占用或被安全软件拦截），参数仅在"
+                "当前运行的服务中生效，重启后回退；auto_start 等已按各自"
+                "通道处理")}
+        cfg = await get_config()
+        if ("auto_start_registry_ok" in res
+                and not res["auto_start_registry_ok"]):
+            cfg["auto_start_registry_ok"] = False
+        return {"ok": True, "config": cfg}
 
     # ---------- 生成的脚本 ----------
 
