@@ -27,8 +27,9 @@ from . import globalconf
 from . import mcpserver
 from .capture import (MARK_SUFFIX, STATE_IDLE, CaptureManager,
                       evaluate_violation, list_history_sessions,
-                      parse_index_records, purge_history_session,
-                      rename_with_retry, session_path)
+                      noise_candidates_from_index, parse_index_records,
+                      purge_history_session, rename_with_retry,
+                      session_path)
 from .config import (ANALYSIS_GUIDE_PATH, API_DOC_PATH, BASE_DIR, EXTENSION_DIR,
                      LOG_DIR, PROJECT_ROOT, SCRIPTS_EXAMPLE_DIR, Config,
                      ensure_dirs, get_auto_start)
@@ -673,8 +674,47 @@ def create_app(tray_on_change=None, tray_notify=None):
     @app.post("/api/capture/stop")
     async def capture_stop():
         ok, msg = await capture.stop(source="web")
-        return JSONResponse({"ok": ok, "message": msg},
+        # 高频重复（轮询/心跳类）请求汇总：结束时告知（必然注意力点），
+        # 清单已写入生成提示词模板（AI 分析时忽略）；records 保留至下次
+        # 开始抓包，noise_candidates 可供状态查询。计算放后台线程——
+        # 大会话（实测 11159 行）同步计算约 0.5s，直接跑会阻塞事件循环
+        noise = await asyncio.to_thread(capture.noise_candidates) if ok else []
+        return JSONResponse({"ok": ok, "message": msg,
+                             "noise_candidates": noise},
                             status_code=200 if ok else 400)
+
+    class IgnoreRepeatBody(BaseModel):
+        url: str
+
+    @app.post("/api/capture/ignore_repeat")
+    async def capture_ignore_repeat(body: IgnoreRepeatBody):
+        """一键忽略高频重复（轮询/心跳类）请求：按 URL 路径向抓包配置
+        的忽略的URI规则追加 prefix 规则（会话级，对后续数据即时生效；
+        已产生的记录可用抓包页"删除不满足条件的记录"清理）。
+
+        人工会话专用（AI 会话经 MCP set_capture_filters 设置，口径一致）；
+        抓包中仅与触发方一致的来源可修改配置（与 PUT config 同规则）。
+        """
+        ok, err = capture.check_source("web")
+        if not ok:
+            return JSONResponse({"ok": False, "message": err}, status_code=400)
+        try:
+            path = urlsplit(body.url or "").path or ""
+        except ValueError:
+            path = ""
+        if not path.startswith("/"):
+            return JSONResponse(
+                {"ok": False, "error": "无法从 URL 解析出路径（需以 / 开头）"},
+                status_code=400)
+        rules = [r for r in (capture.capture_conf.get("uri_rules") or [])
+                 if isinstance(r, dict)]
+        if not any(r.get("type") == "prefix" and r.get("value") == path
+                   for r in rules):
+            rules.append({"type": "prefix", "value": path})
+            capture.capture_conf["uri_rules"] = rules
+        return {"ok": True, "path": path,
+                "message": "已忽略该请求的后续记录（会话级）；已产生的记录"
+                           "可用\"删除不满足条件的记录\"清理"}
 
     @app.post("/api/capture/purge")
     async def capture_purge():
@@ -993,11 +1033,33 @@ def create_app(tray_on_change=None, tray_notify=None):
         # 结构化提示词模板（对应 prompt 需求“生成提示词”节）；
         # 两个“需要人工填写”节由人工在弹窗中编辑后复制给 AI；
         # 路径前后带空格，便于 AI 识别路径边界
+        # 高频重复（轮询/心跳类）请求清单（噪音治理兜底）：AI 分析时
+        # 忽略，无需逐条查看（检测口径见 capture._noise_candidates）
+        noise = await asyncio.to_thread(
+            noise_candidates_from_index, os.path.join(p, "index.md"))
+        noise_text = ""
+        if noise:
+            noise_text = (
+                "# 高频重复请求（轮询/心跳/埋点类，分析时可忽略）\n"
+                + "".join(
+                    ("%s %s ×%d（超高频·小响应）\n" % (
+                        it["method"], it["path"], it["count"]))
+                    if it.get("reason") == "mass" else
+                    ("%s %s ×%d（平均间隔%.1f秒）\n" % (
+                        it["method"], it["path"], it["count"],
+                        it["avg_interval_ms"] / 1000))
+                    for it in noise)
+                + "以上接口同URL高频重复（间隔规律的周期轮询，或超高频且"
+                  "响应极小的埋点/心跳），为噪音——分析时无需逐条查看明细"
+                  "文件；业务接口（含各接口首次出现）正常分析\n")
         text = (
             "# 提供数据\n"
             "%s 为浏览器访问抓包记录目录，需要根据文件内容进行分析，"
             "首先读取index.md汇总文件，再按序号查看明细文件\n"
             "%s 需要根据文件内容了解Python脚本生成的执行环境与依赖约束等\n"
+        ) % (os.path.abspath(p), os.path.abspath(API_DOC_PATH))
+        text += noise_text
+        text += (
             "# 分析前端页面\n"
             "假如仅通过抓包数据无法分析网站请求逻辑，AI可使用chrome-devtools-attach MCP工具操作浏览器分析前端页面，可参考 %s 建议\n"
             "操作页面期间假如正在抓包，每执行一个前端操作（点击/填写/选择）前后"
@@ -1007,6 +1069,10 @@ def create_app(tray_on_change=None, tray_notify=None):
             "假如开始抓包时开启了\"记录前端页面操作\"（DOM事件监听注入），"
             "页面上的人工操作会自动记录到 index.md 统一时间线中，"
             "无需人工调用 note\n"
+            "假如需要补充抓包，先经 GET /api/capture/hosts 查询抓包Chrome访问过的"
+            "域名，再设置需要抓包的网址（PUT /api/capture/config 的 domains，仅目标"
+            "业务域）后开始，避免埋点/心跳等无关请求混入抓包记录；同域的高频轮询/"
+            "心跳可在忽略的URI规则（uri_rules，prefix 前缀匹配）中排除\n"
             "# 验证要求\n"
             "写脚本前，对从抓包/页面推断出的每个关键假设（filter参数格式、可选值、"
             "分页行为、空值与日期等边界语义）先用 /api/cookies/cdp 获取登录态、"
@@ -1033,8 +1099,7 @@ def create_app(tray_on_change=None, tray_notify=None):
             "（需要人工填写：说明当前进行了什么操作，有哪些页面有展示的重要的值是什么）\n"
             "# 生成Python脚本具体要求\n"
             "（需要人工填写：说明生成的Python脚本需要执行什么功能，是否有入参，执行逻辑是什么）\n"
-        ) % (os.path.abspath(p), os.path.abspath(API_DOC_PATH),
-             os.path.abspath(ANALYSIS_GUIDE_PATH),
+        ) % (os.path.abspath(ANALYSIS_GUIDE_PATH),
              os.path.abspath(scripts_root),
              os.path.abspath(ANALYSIS_GUIDE_PATH))
         return {"prompt": text}
@@ -1472,6 +1537,12 @@ def create_app(tray_on_change=None, tray_notify=None):
             "（做了什么、预期触发什么请求），便于精确对齐前端操作与抓到的请求",
             "开始抓包时开启 inject_ops（DOM操作监听注入）可自动记录前端页面操作"
             "（含人工操作的输入值与提交事件），无需逐个调用 note_capture",
+            "开始抓包前建议先经 chrome-operate 查询抓包Chrome有访问的网址"
+            "（get_capture_hosts），并把需要抓包的网址（set_capture_filters 的"
+            " domains）设为仅目标业务域——避免埋点/心跳等无关请求混入抓包记录"
+            "（无关请求过多会显著增加分析工作量）；与目标网站同域的高频轮询/"
+            "心跳（domains 挡不住）可用忽略的URI规则（uri_rules 的 prefix "
+            "前缀匹配轮询路径）排除",
             "# 任务",
             "先在页面上用不同筛选条件各查几次并抓包，分析前端操作与"
             "调用后台接口的关系（注意数据未必都走接口：可能内嵌在页面"

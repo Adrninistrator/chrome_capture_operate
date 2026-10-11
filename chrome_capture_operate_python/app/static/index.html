@@ -235,6 +235,7 @@ button.btn.chrome-top:disabled { background: #ccd3da; color: #f4f6f8; cursor: de
   </div>
   <div class="card">
     <b>当前抓包记录</b> <span class="muted">（实时刷新）</span>
+    <div id="noiseBanner" style="display:none;margin-top:8px;border:1px solid #e8d48b;background:#fdf6e3;border-radius:6px;padding:8px 10px;font-size:13px"></div>
     <table id="recTable" style="margin-top:8px">
       <thead><tr><th>序号</th><th>请求时间</th><th>方法</th><th>资源类型</th><th>URL</th><th>content-type</th><th>请求body字节数</th><th>返回body字节数</th><th>耗时ms</th><th></th></tr></thead>
       <tbody></tbody>
@@ -1193,6 +1194,68 @@ function renderState(st) {
   $('#capState').textContent = st.state === 'capturing' ? `抓包中：${st.session}，已记录 ${st.record_count} 条`
     : st.state === 'paused' ? `已暂停：${st.session}（记录保留，可继续）`
     : (st.message || '');
+  renderNoiseBanner(st);
+}
+
+/* ---------- 高频重复（轮询/心跳类）请求提示（噪音治理） ----------
+   非模态常驻提示条（可关闭，不阻塞操作，不看无损）；检测在服务端
+   （同接口重复多 + 间隔规律 + 返回小），建议性质、从不自动忽略；
+   "忽略"=向忽略的URI规则追加路径前缀规则（会话级，仅对后续数据生效）。
+   不处理也无影响：生成提示词模板时会写入该清单，AI 分析时自动忽略 */
+const noiseDismissed = new Set();   // 已忽略/已关闭的 path（本页生命周期内不再提示）
+let lastNoiseSt = null;
+function fmtIntervalMs(ms) {
+  return ms >= 1000 ? (ms / 1000).toFixed(1) + ' 秒' : ms + ' 毫秒';
+}
+function renderNoiseBanner(st) {
+  lastNoiseSt = st;
+  const box = $('#noiseBanner');
+  if (!box) return;
+  const items = ((st && st.state === 'capturing' && st.noise_candidates) || [])
+    .filter(it => !noiseDismissed.has(it.path));
+  if (!items.length) { box.style.display = 'none'; return; }
+  box.style.display = '';
+  const evidence = it => it.reason === 'mass'
+    ? `×${it.count}（超高频·小响应）`
+    : `×${it.count}（平均间隔 ${fmtIntervalMs(it.avg_interval_ms)}）`;
+  box.innerHTML =
+    '<b>检测到高频重复请求</b>（同接口重复多——间隔规律的周期轮询，或超高频且响应极小的埋点/心跳）' +
+    '<div style="margin:4px 0">' + items.map(it =>
+      `<div style="display:flex;align-items:center;gap:8px;margin:2px 0">` +
+      `<span style="flex:1">${esc(it.method)} ${esc(it.path)} ${evidence(it)}</span>` +
+      `<button class="btn" data-npath="${esc(it.path)}" data-nurl="${esc(it.sample_url)}" title="向忽略的URI规则追加该路径的前缀规则（会话级，仅对后续数据生效；已产生的记录可用“删除不满足条件的记录”清理）">忽略</button>` +
+      `<button class="link" data-nclose="${esc(it.path)}" title="本页内不再提示该请求（不影响任何数据）">关闭</button></div>`).join('') + '</div>' +
+    (items.length >= 2
+      ? '<div style="margin:2px 0"><button class="btn" id="nbIgnoreAll" title="将以上全部请求按路径加入忽略规则（会话级，仅对后续数据生效）">忽略全部</button></div>'
+      : '') +
+    '<span class="muted">建议性质：不处理也无影响，生成提示词时会写入该清单，AI 分析时自动忽略</span>';
+  box.querySelectorAll('button[data-npath]').forEach(b => {
+    b.onclick = async () => {
+      const r = await api('/api/capture/ignore_repeat', {method: 'POST', body: JSON.stringify({url: b.dataset.nurl})});
+      if (r.error || !r.ok) { toastMsg(r.error || r.message || '忽略失败', 'err', 5000); return; }
+      toastMsg(r.message, 'ok', 7000);
+      noiseDismissed.add(b.dataset.npath);
+      // 同步抓包配置的"忽略的URI"列表展示：不从服务端重载的话列表是旧
+      // 状态，下次保存抓包配置（或开始抓包前的回推）会把刚加的规则冲掉
+      await loadCaptureConf();
+      refreshStatus();
+    };
+  });
+  const allBtn = box.querySelector('#nbIgnoreAll');
+  if (allBtn) allBtn.onclick = async () => {
+    allBtn.disabled = true;
+    let done = 0;
+    for (const it of items) {
+      const r = await api('/api/capture/ignore_repeat', {method: 'POST', body: JSON.stringify({url: it.sample_url})});
+      if (r.ok) { noiseDismissed.add(it.path); done++; }
+    }
+    toastMsg(`已忽略 ${done}/${items.length} 个请求的后续记录（已产生的记录可用"删除不满足条件的记录"清理）`, 'ok', 8000);
+    await loadCaptureConf();
+    refreshStatus();
+  };
+  box.querySelectorAll('button[data-nclose]').forEach(b => {
+    b.onclick = () => { noiseDismissed.add(b.dataset.nclose); renderNoiseBanner(lastNoiseSt); };
+  });
 }
 async function refreshStatus() { renderState(await api('/api/status')); }
 
@@ -1268,7 +1331,17 @@ $('#btnPauseResume').onclick = async () => {
   if (!r.ok) toastMsg(r.message || r.error, 'err');
   refreshStatus();
 };
-$('#btnEnd').onclick = async () => { await api('/api/capture/stop', {method: 'POST'}); refreshStatus(); };
+$('#btnEnd').onclick = async () => {
+  const r = await api('/api/capture/stop', {method: 'POST'});
+  if (r.error) { toastMsg(r.error, 'err', 4000); refreshStatus(); return; }
+  // 结束抓包时汇总高频重复请求（必然注意力点）：清单已写入生成提示词
+  // 模板（AI 分析时忽略），无需人工在此决策
+  if (r.ok && r.noise_candidates && r.noise_candidates.length) {
+    const top = r.noise_candidates[0];
+    toastMsg(`结束抓包：检测到 ${r.noise_candidates.length} 个高频重复请求（如 ${top.method} ${top.path} ×${top.count}），清单已写入生成提示词模板，AI 分析时将忽略`, 'ok', 9000);
+  }
+  refreshStatus();
+};
 $('#btnPurge').onclick = async () => {
   const b = $('#btnPurge');
   if (!b.dataset.armed) { armConfirm(b, '再次点击确认删除', 4); return; }

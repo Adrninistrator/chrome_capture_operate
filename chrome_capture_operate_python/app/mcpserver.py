@@ -51,18 +51,28 @@ def clip_output(text, max_lines, max_bytes):
 
 def _server_instructions():
     """MCP 使用说明（协议 server instructions 字段，客户端 initialize
-    时下发；prompt 需求「### 说明：需要说明当前提供的MCP工具怎样使用」。"""
+    时下发；prompt 需求「### 说明：需要说明当前提供的MCP工具怎样使用」。
+
+    分层约定（2026-10-11 瘦身）：instructions 只保留**工作流顺序与关键
+    决策点**；各工具的参数细节与语义（过滤规则示例、暂停语义、purge
+    的 session 语义、重命名规则、执行截断等）在各自的 description——
+    工具描述同样随 tools/list 进入模型上下文，且在调用时最相关，两处
+    重复维护同一段长文只会同步漂移（此前步骤 2 约 600 字）。
+    """
     return (
         "chrome_capture_operate MCP 服务使用说明\n"
         "\n"
         "本服务提供 HTTP 请求抓包与生成的脚本执行能力。典型工作流：\n"
-        "1. start_capture_chrome 启动用于抓包的 Chrome（独立 profile、CDP 调试端口 9222），人工在该 Chrome 中操作目标网站；\n"
-        "2. start_capture 开始抓包（inject_ops=true 时注入 DOM 操作监听，前端页面操作自动留痕与请求对齐），人工操作产生的网络访问被保存到 captured_record/<时间目录>/；数据读取：index.md 为汇总——抓包中实时写入（行序为到达顺序，分析时按'请求时间'列排序），结束抓包后已按时间全量重排（请求行与前端操作行统一时间线）；明细文件按序号命名：请求 {0000000001}.md、前端操作 {fr00000001}.md。期间可 get_capture_hosts 查看访问过的网址、set_capture_filters 调整过滤条件（会话级即时生效）、pause_capture/resume_capture 暂停恢复、purge_filtered_records 删除被过滤的记录（session 为空对当前抓包会话执行，非空对已结束会话的指定子目录执行）、note_capture 补充记录操作注释（开启 inject_ops 后前端操作已自动留痕，无需逐个调用）、rename_capture_session 在抓包结束后给会话目录增加或修改描述后缀并可附加人工标记（时间戳前缀保留，目录便于识别本会话做了什么）。注意：开始抓包会记录触发方式（人工网页/MCP工具），暂停/继续/结束抓包、修改过滤条件、人工标记等操作需与触发方式一致（人工网页开始的抓包MCP工具不能操作，反之亦然），避免人工与AI同时操作；\n"
-        "3. stop_capture 结束抓包（Chrome 继续保留）；结束后可用 list_capture_sessions 查询抓包目录下的子目录（含记录数与完整路径，人工标记的目录名以 _人工标记 结尾），获取本次或历史会话目录；\n"
-        "4. 人工依据抓包数据生成 Python 脚本（保存在脚本目录下；api 目录的文档（api.md、analysis-guide.md）会在人工复制的提示词中指定，此说明中不再赘述）；\n"
-        "5. list_scripts 查看生成的脚本，run_script 执行（同步等待，timeout 可覆盖配置超时，输出按 max_lines/max_bytes 截尾保留）；脚本内经 HTTP 接口获取登录态（query_cookies 同口径：浏览器语义 Cookie + 精确主机 Authorization）；\n"
-        "6. query_cookies 随时查询当前接收到的 Chrome Cookie。\n"
-        "7. chrome插件自动安装：registry_install_extension 注册表策略安装（打包CRX到服务目录crx，UAC需人工确认；安装后自动操作Chrome在chrome://policy点重新加载政策使插件立即安装，并打开chrome://extensions展示结果）；registry_uninstall_extension 一键卸载（删策略后自动重新加载政策，约1-4分钟后台任务）；ui_install_extension 模拟点击安装（约10秒，期间人工勿动键鼠）；进度经 get_extension_install_status 查询；执行期间桌面周边显示绿色边框（完毕结束），完成或失败时经桌面右下角弹窗通知用户（30秒后自动消失）。\n"
+        "1. start_capture_chrome 启动用于抓包的 Chrome，人工在其中打开并登录目标网站；\n"
+        "2. 开始抓包前建议先 get_capture_hosts 审计访问过的域名，经 set_capture_filters 设置过滤：需要抓包的网址（domains）设为仅目标业务域，与目标同域的高频轮询/心跳用忽略的URI规则（uri_rules）排除——避免埋点/心跳等无关请求落盘拖垮分析效率；\n"
+        "3. start_capture 开始抓包（inject_ops=true 注入 DOM 操作监听，前端页面操作自动留痕与请求对齐）；期间可随时 get_capture_hosts 查看访问过的网址、set_capture_filters 调整过滤（会话级即时生效）、pause_capture/resume_capture 暂停恢复（跳过无关操作段）、note_capture 补充操作注释；get_capture_status 的 noise_candidates 列出高频重复的轮询/心跳类请求（确认后经 set_capture_filters 忽略）、repeat_stats 为重复最多的接口统计（含未判噪声的项，是否忽略按业务判断）；\n"
+        "4. stop_capture 结束抓包（Chrome 继续保留）；数据读取说明（index.md 汇总、明细按序号命名、抓包中与结束后的行序语义）见 get_capture_status 与 stop_capture 返回的 data_note；结束后可用 list_capture_sessions 定位会话目录、purge_filtered_records 清理被过滤的记录、rename_capture_session 给目录命名便于识别；\n"
+        "5. 人工依据抓包数据生成 Python 脚本（api 目录的文档（api.md、analysis-guide.md）会在人工复制的提示词中指定，此说明中不再赘述）；\n"
+        "6. list_scripts 查看生成的脚本，run_script 执行（同步等待结束，超时自动终止）；脚本经 HTTP 接口获取登录态（query_cookies 同口径）；\n"
+        "7. query_cookies 随时查询当前接收到的 Chrome Cookie；\n"
+        "8. chrome插件安装/卸载：registry_install_extension（策略强装）/ ui_install_extension（模拟点击）/ registry_uninstall_extension（卸载），进度与结果经 get_extension_install_status 查询（各方式差异与注意事项见对应工具说明）。\n"
+        "\n"
+        "注意：开始抓包会记录触发方式（人工网页/MCP工具），暂停/继续/结束抓包、修改过滤条件、人工标记等操作需与触发方式一致（人工网页开始的抓包MCP工具不能操作，反之亦然），避免人工与AI同时操作。\n"
         "\n"
         "生成的脚本获取 Cookie 的接口契约见项目根目录的 api/api.md。\n"
         "服务监听 127.0.0.1（本机），Web 页面地址与 MCP SSE 同端口。"
@@ -117,7 +127,13 @@ def create_mcp_server(config, capture, store, executor):
         return {"ok": ok, "message": msg}
 
     @mcp.tool(name="pause_capture",
-              description="暂停抓包：不清空已产生的记录，之后可恢复。仅当本次抓包由MCP开始时可执行（人工网页开始的会返回错误，避免人工与AI同时操作）")
+              description="暂停抓包：不清空已产生的记录，之后可恢复（同一会话"
+                          "时间线继续）。暂停期间网络访问与前端页面操作均不"
+                          "写入——会话中途要处理与目标无关的操作（查别的系统、"
+                          "等待等）时先暂停，可从源头跳过无关记录（显式的"
+                          "note_capture 注释不受影响，暂停期间仍可记录）。"
+                          "仅当本次抓包由MCP开始时可执行（人工网页开始的会"
+                          "返回错误，避免人工与AI同时操作）")
     async def pause_capture() -> dict:
         ok, msg = await capture.pause(source="mcp")
         return {"ok": ok, "message": msg}
@@ -300,7 +316,19 @@ def create_mcp_server(config, capture, store, executor):
               description="查询当前抓包访问信息：是否正在抓包、抓包文件保存"
                           "目录路径（未抓包为空）、触发方式（web=人工网页/"
                           "mcp=AI Agent，未抓包为空）、data_note（数据读取"
-                          "说明：抓包中与结束后分别从哪个文件分析、行序语义）")
+                          "说明：抓包中与结束后分别从哪个文件分析、行序语义）、"
+                          "noise_candidates（高频重复噪音请求清单，建议性质"
+                          "不自动忽略——两类判据取并集：间隔规律的周期轮询，"
+                          "或超高频且响应极小（次数≥100、平均≤512B，覆盖"
+                          "成组上报的埋点与多页面交错的登录态心跳）；确认非"
+                          "业务接口后可经 set_capture_filters 的 uri_rules 按"
+                          "路径前缀忽略，已落盘的经 purge_filtered_records "
+                          "清理；抓包中与刚结束均可查，每项 reason 标注命中"
+                          "判据）、"
+                          "repeat_stats（重复次数最多的接口统计，信息性不判噪声"
+                          "：noise=false 的项未满足噪声判据——如大响应的周期性"
+                          "刷新可能是业务数据源，是否忽略由你按业务判断；"
+                          "noise=true 的项即 noise_candidates 建议忽略）")
     async def get_capture_status() -> dict:
         st = await asyncio.to_thread(capture.status)
         if capture.session_dir and st["state"] in ("capturing", "paused"):
@@ -322,12 +350,17 @@ def create_mcp_server(config, capture, store, executor):
             "session_dir": capture.session_dir or "",
             "trigger": capture.trigger or "",
             "data_note": note,
+            "noise_candidates": st.get("noise_candidates", []),
+            "repeat_stats": st.get("repeat_stats", []),
         }
 
     @mcp.tool(name="get_capture_hosts",
               description="查询抓包Chrome有访问的网址：自服务启动以来累计"
                           "访问过的域名清单（跨抓包会话累积，不随会话重置），"
-                          "按首次访问顺序无关的字母序返回")
+                          "按首次访问顺序无关的字母序返回。开始抓包前审计"
+                          "域名、把 set_capture_filters 的需要抓包的网址设为"
+                          "仅目标业务域，可避免埋点/心跳等无关请求落盘；与"
+                          "目标同域的高频轮询/心跳再以 uri_rules 前缀忽略")
     async def get_capture_hosts() -> dict:
         return {"hosts": sorted(capture.seen_hosts),
                 "count": len(capture.seen_hosts)}

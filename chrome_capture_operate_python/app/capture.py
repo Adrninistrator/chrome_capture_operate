@@ -307,6 +307,143 @@ def parse_index_records(index_path):
     return records
 
 
+# ---------- 高频重复（轮询/心跳类）请求检测（2026-10-11，噪音治理） ----------
+# 判定保守（宁漏勿误，人工/驱动者确认制，从不自动忽略）：
+# - 同接口（method+host+path，去 query——与"首次"★同口径）重复
+#   >= NOISE_MIN_REPEATS 次（业务"各查几次"远低于此）；
+# - 间隔变异系数（std/mean）<= NOISE_MAX_CV：周期性是轮询的强特征，
+#   人工操作与业务多次查询/翻页的间隔随机，通不过该判据；
+# - 平均返回 <= NOISE_MAX_AVG_RESP_BYTES：心跳/埋点响应极小；翻页等
+#   业务接口响应大，不误伤（业务翻页即使重复多次也不会命中）。
+NOISE_MIN_REPEATS = 15
+NOISE_MAX_CV = 0.35
+NOISE_MAX_AVG_RESP_BYTES = 2048
+NOISE_LIST_LIMIT = 10
+# L2 量级判据（2026-10-11 补充，真实 11197 文件会话实测：三类噪音
+# ——成组上报埋点（组内背靠背 <1s 拉高 cv 至 2.2/4.39）、多页面交错的
+# 登录态心跳（多流叠加 cv 1.12）——间隔均不规律、L1 全部漏检；L2 按
+# "超高频 + 微小响应"命中全部且不误伤业务（业务项 ≤41 次或响应大）。
+# 2 小时会话内同接口 100+ 次且平均响应 ≤512B 的人工/业务操作形态
+# 不存在——业务高频小轮询即使命中也由确认制兜底（建议性质）。
+NOISE_MASS_MIN_REPEATS = 100
+NOISE_MASS_MAX_AVG_RESP = 512
+# repeat_stats（重复接口统计，信息性）的最小重复次数与条数上限
+REPEAT_STATS_MIN = 5
+REPEAT_STATS_LIMIT = 10
+
+
+def _repeat_groups(rows):
+    """按接口（method+host+path 去 query）分组统计：次数/平均间隔/
+    变异系数/平均返回。噪声判定（_noise_candidates）与重复统计
+    （_repeat_stats）共用的分组口径与基础指标。"""
+    groups = {}
+    for r in rows or []:
+        try:
+            wall = float(r.get("wall_time") or 0)
+        except (TypeError, ValueError):
+            continue
+        if wall <= 0:
+            continue
+        g = groups.setdefault(_url_key(r),
+                              {"method": r.get("method") or "",
+                               "url": r.get("url") or "",
+                               "walls": [], "sizes": []})
+        g["walls"].append(wall)
+        try:
+            g["sizes"].append(int(r.get("resp_size") or 0))
+        except (TypeError, ValueError):
+            g["sizes"].append(0)
+    stats = []
+    for g in groups.values():
+        walls = sorted(g["walls"])
+        ivs = [b - a for a, b in zip(walls, walls[1:])]
+        mean = sum(ivs) / len(ivs) if ivs else 0.0
+        std = (sum((x - mean) ** 2 for x in ivs) / len(ivs)) ** 0.5 \
+            if ivs else 0.0
+        try:
+            path = urlsplit(g["url"]).path or "/"
+        except ValueError:
+            path = "/"
+        stats.append({"method": g["method"], "path": path,
+                      "sample_url": g["url"], "count": len(walls),
+                      "avg_interval_ms": round(mean * 1000),
+                      "cv": round(std / mean, 2) if mean > 0 else 0.0,
+                      "avg_resp_bytes": round(
+                          sum(g["sizes"]) / len(g["sizes"]))})
+    return stats
+
+
+def _noise_reason(s):
+    """噪声判据命中层（返回 "periodic"/"mass"，未命中 None）。
+
+    L1 周期判据：单流稳定周期轮询（次数≥15 + cv≤0.35 + 响应≤2KB）；
+    L2 量级判据：超高频微小响应（次数≥100 + 平均响应≤512B）——覆盖
+    L1 漏检的两类真实形态（间隔不规律）：成组上报的埋点（组内背靠背
+    拉高 cv）、多页面/多 iframe 交错的登录态心跳（多流叠加拉高 cv）。
+    """
+    if (s["count"] >= NOISE_MIN_REPEATS
+            and s["cv"] <= NOISE_MAX_CV
+            and s["avg_resp_bytes"] <= NOISE_MAX_AVG_RESP_BYTES):
+        return "periodic"
+    if (s["count"] >= NOISE_MASS_MIN_REPEATS
+            and s["avg_resp_bytes"] <= NOISE_MASS_MAX_AVG_RESP):
+        return "mass"
+    return None
+
+
+def _noise_hit(s):
+    """单组统计是否满足噪声判据（L1 周期 OR L2 量级，见 _noise_reason）。"""
+    return _noise_reason(s) is not None
+
+
+def _noise_candidates(rows):
+    """高频重复噪音请求清单（模块级：抓包中与历史会话共用）。
+
+    rows 需含 wall_time（epoch 秒）、method、url、resp_size（历史会话经
+    parse_index_records 解析后转换，见 noise_candidates_from_index）。
+    返回按重复次数降序（上限 NOISE_LIST_LIMIT），每项含 reason
+    （"periodic"=周期轮询 / "mass"=超高频微小响应）——两判据均保守
+    （宁漏勿误），未命中的大量重复请求见 _repeat_stats（交 AI 判断）。
+    """
+    out = []
+    for s in _repeat_groups(rows):
+        reason = _noise_reason(s)
+        if reason:
+            out.append(dict(s, reason=reason))
+    out.sort(key=lambda x: -x["count"])
+    return out[:NOISE_LIST_LIMIT]
+
+
+def _repeat_stats(rows):
+    """重复次数最多的接口统计（top-N，信息性、不做噪声判定）。
+
+    供 AI（MCP get_capture_status 的 repeat_stats）对**未命中噪声判据**
+    的大重复量请求自行判断是否忽略——例如同域大响应的周期性列表刷新
+    （可能是业务数据源，不能由工具建议忽略）：每项含次数/平均间隔/
+    变异系数/平均返回与 noise（是否同时满足噪声判据，true=建议忽略）。
+    """
+    stats = [dict(s) for s in _repeat_groups(rows)
+             if s["count"] >= REPEAT_STATS_MIN]
+    stats.sort(key=lambda x: -x["count"])
+    return [dict(s, noise=_noise_hit(s))
+            for s in stats[:REPEAT_STATS_LIMIT]]
+
+
+def noise_candidates_from_index(index_path):
+    """历史会话 index.md → 高频重复请求清单（供生成提示词模板写入，
+    AI 分析时忽略）。操作行不参与（is_op 过滤）。"""
+    rows = []
+    for r in parse_index_records(index_path):
+        if r.get("is_op"):
+            continue
+        wall = _parse_op_time(r)   # time 字段同格式（含日期毫秒）
+        if wall is None:
+            continue
+        rows.append({"wall_time": wall, "method": r.get("method"),
+                     "url": r.get("url"), "resp_size": r.get("resp_size")})
+    return _noise_candidates(rows)
+
+
 def list_history_sessions():
     """列出抓包记录目录下的全部子目录（新在前，按目录名倒序）。
     每项含名称、记录数、完整路径、是否人工标记。
@@ -528,14 +665,23 @@ class CDPClient:
             self._pending.clear()
 
     async def _dispatch_loop(self):
-        """串行处理事件（保持 CDP 事件顺序）；队列排空后再触发 on_close。"""
+        """串行处理事件（保持 CDP 事件顺序）；队列排空后再触发 on_close。
+
+        handler 契约：async（返回值 awaitable 才 await）——**同步 handler
+        同样容忍**（返回值忽略）。此前无条件 await，同步回调每事件抛
+        "await None" TypeError 并逐条刷异常日志（2026-10-11 验证脚本
+        实测踩坑：外部脚本注册同步 lambda 时 180 秒刷 250 屏异常）。
+        """
+        import inspect
         while True:
             msg = await self._event_queue.get()
             if msg is None:
                 break
             for cb in self._handlers.get(msg.get("method"), []):
                 try:
-                    await cb(msg.get("sessionId"), msg.get("params", {}))
+                    res = cb(msg.get("sessionId"), msg.get("params", {}))
+                    if inspect.isawaitable(res):
+                        await res
                 except Exception:
                     log.exception("CDP 事件处理异常 %s", msg.get("method"))
         if self.on_close:
@@ -603,7 +749,24 @@ class CaptureManager:
             "record_count": self.counter,
             "marked": self.marked,
             "trigger": self.trigger,
+            # 高频重复（轮询/心跳类）请求清单（建议性质；抓包中与刚结束
+            # 均可计算——records 在下次 start 前保留）
+            "noise_candidates": self.noise_candidates(),
+            # 重复次数最多的接口统计（信息性、不做噪声判定；供 AI 对
+            # 未命中噪声判据的大重复量请求自行判断——如大响应周期刷新）
+            "repeat_stats": self.repeat_stats(),
         }
+
+    def noise_candidates(self):
+        """当前/最近会话的高频重复（轮询/心跳类）请求清单。
+
+        从内存 records 计算（结束抓包后 records 保留到下次开始抓包，
+        供结束汇总与状态查询使用）。"""
+        return _noise_candidates(self.records)
+
+    def repeat_stats(self):
+        """当前/最近会话重复次数最多的接口统计（信息性）。"""
+        return _repeat_stats(self.records)
 
     def clear_hosts(self):
         """清空累计访问过的网址清单（seen_hosts）。
@@ -1063,7 +1226,12 @@ class CaptureManager:
         return True, "已关闭前端页面操作记录（已记录的操作保留）"
 
     async def pause(self, source=None):
-        """暂停抓包：不清空当前显示的记录，之后可以继续。"""
+        """暂停抓包：不清空当前显示的记录，之后可以继续。
+
+        暂停期间网络访问与前端页面操作事件均不写入（与抓包过滤无关的
+        操作段从源头不产生记录，恢复后同一会话时间线继续）；显式的
+        note 注释不受影响，暂停期间仍可记录。
+        """
         if self.state != STATE_CAPTURING:
             return False, "当前未在抓包，无法暂停"
         ok, err = self.check_source(source)
@@ -1253,9 +1421,12 @@ class CaptureManager:
         Runtime.consoleAPICalled 事件回传（不受页面 CSP 约束），此处解析
         后格式化为文本写入时间线。不经 note() 的 source 校验——页面事件
         观察与抓包触发方式无关（人工/mcp 触发的会话同样记录）。
+        状态守卫与网络请求（_on_request）同口径：仅 CAPTURING 记录——
+        **暂停期间页面操作事件同样不写入**（此前含 PAUSED，暂停跳过
+        无关操作段的用法只对网络生效、DOM 操作事件照样混入时间线；
+        显式的 note 注释不受影响，暂停期间仍可记录）。
         """
-        if not self.ops_inject or self.state not in (STATE_CAPTURING,
-                                                     STATE_PAUSED):
+        if not self.ops_inject or self.state != STATE_CAPTURING:
             return
         if not self.session_dir:
             return
@@ -1289,10 +1460,10 @@ class CaptureManager:
         """Runtime.exceptionThrown：页面 JS 异常进 note 时间线（决策 8）。
 
         无需注入，服务端 CDP 直接接收；操作后页面报错与请求失败的
-        关联分析有价值。
+        关联分析有价值。状态守卫与网络请求同口径：仅 CAPTURING 记录
+        （暂停期间页面异常不写入，与页面操作事件一致）。
         """
-        if not self.ops_inject or self.state not in (STATE_CAPTURING,
-                                                     STATE_PAUSED):
+        if not self.ops_inject or self.state != STATE_CAPTURING:
             return
         if not self.session_dir:
             return
