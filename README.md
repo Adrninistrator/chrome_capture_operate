@@ -358,7 +358,6 @@ Chrome 已启动时该按钮变为**置顶用于抓包的Chrome进程**，点击
 
 - `api/auto-login-guide.md`：生成要求、MCP、登录态判断、两阶段流程、安全；
 - `api/browser-actions.md`：浏览器动作接口契约；
-- `python_scripts/volcengine_login/`：当前自动登录示例。
 
 ## 执行生成的脚本
 
