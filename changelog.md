@@ -1,3 +1,15 @@
+# 20261022
+
+- 新增自动登录脚本生成功能：AI自主操作Chrome 弹窗增加 d. 自动登录脚本提示词；`login_accounts` 改为纯扁平 Map（key 整体作为参数名称），提供通用账号管理页面（参数名称/参数值 CRUD、全局配置路径），d 标签页人工维护“页面输入字段描述 -> 参数名称”映射；提示词精简为任务参数、MCP 工具、启动抓包 Chrome/浏览器接口、指南路径和输出目录，登录网址或映射不完整时禁用复制
+- 新增 `POST /api/browser/actions`：主应用内部使用 Playwright 连接抓包 Chrome、复用标签页，支持 goto/fill/click/press/wait_for_selector/wait_for_url/wait_for_load_state/wait_for_timeout/get_url/get_text/get_title/is_visible；fill 支持 value_from，由主应用从 login_accounts 解析，账号值不进入生成脚本；等待动作支持 continue_on_timeout，示例脚本不再固定 sleep
+- 生成的登录脚本启动时调用 /api/chrome/start 确保抓包 Chrome 已启动；登录态只使用 /api/cookies/cdp；无登录后抓包时按两阶段流程（先生成 login_bootstrap.py，通过 chrome-operate 的 run_script 运行，登录成功后再分析登录态接口）；MCP 仅用于生成阶段，生成的脚本不使用 MCP/Playwright
+- 文档：新增 api/auto-login-guide.md、api/browser-actions.md；浏览器动作接口从 api/api.md 拆分；提示词模板、README、prompt-生成完整文档更新（独立自动登录章节、test_ 示例、从页面复制提示词）；补充定时执行脚本无人值守要求
+- 测试：自动登录接口、账号 CRUD、浏览器动作校验/value_from、提示词模板、等待动作等；全量 350 passed, 1 skipped
+
+# 20261013
+
+- 新增MCP工具query_cookies_cdp：AI Agent经MCP实时读取用于抓包的Chrome的Cookie与Authorization（与HTTP接口同口径，生成脚本期间验证登录态不再依赖插件推送的日常Chrome快照）
+
 # 20261011
 
 - 噪声检测新增量级判据：超高频（次数≥100）且响应极小（平均≤512B）的接口也判为噪音——修复真实多页面会话上成组上报的埋点与多页面交错的登录态心跳全部漏检的问题（周期判据对间隔不规律的这两类形态无效）；提示条支持"忽略全部"，各处文案区分两类判据

@@ -69,7 +69,7 @@ def _server_instructions():
         "4. stop_capture 结束抓包（Chrome 继续保留）；数据读取说明（index.md 汇总、明细按序号命名、抓包中与结束后的行序语义）见 get_capture_status 与 stop_capture 返回的 data_note；结束后可用 list_capture_sessions 定位会话目录、purge_filtered_records 清理被过滤的记录、rename_capture_session 给目录命名便于识别；\n"
         "5. 人工依据抓包数据生成 Python 脚本（api 目录的文档（api.md、analysis-guide.md）会在人工复制的提示词中指定，此说明中不再赘述）；\n"
         "6. list_scripts 查看生成的脚本，run_script 执行（同步等待结束，超时自动终止）；脚本经 HTTP 接口获取登录态（query_cookies 同口径）；\n"
-        "7. query_cookies 随时查询当前接收到的 Chrome Cookie；\n"
+        "7. query_cookies 随时查询当前接收到的 Chrome Cookie（日常Chrome插件推送的快照）；query_cookies_cdp 经CDP实时读取用于抓包的 Chrome 的 Cookie（含httpOnly与分区，抓包 Chrome 已登录即可——生成脚本期间验证登录态用本工具，需先开始抓包再操作页面才有 Authorization）；\n"
         "8. chrome插件安装/卸载：registry_install_extension（策略强装）/ ui_install_extension（模拟点击）/ registry_uninstall_extension（卸载），进度与结果经 get_extension_install_status 查询（各方式差异与注意事项见对应工具说明）。\n"
         "\n"
         "注意：开始抓包会记录触发方式（人工网页/MCP工具），暂停/继续/结束抓包、修改过滤条件、人工标记等操作需与触发方式一致（人工网页开始的抓包MCP工具不能操作，反之亦然），避免人工与AI同时操作。\n"
@@ -559,10 +559,12 @@ def create_mcp_server(config, capture, store, executor):
     # ---------- Cookie ----------
 
     @mcp.tool(name="query_cookies",
-              description="查询接收到的Chrome Cookie：按浏览器语义返回访问"
-                          "该主机时会携带的所有Cookie（domain匹配主域+子域），"
-                          "及该主机的Authorization。profile 为空则查询全部"
-                          "profile的，非空则查询指定profile的（多开区分）")
+              description="查询接收到的Chrome Cookie（日常Chrome经插件推送的"
+                          "快照）：按浏览器语义返回访问该主机时会携带的所有Cookie"
+                          "（domain匹配主域+子域），及该主机的Authorization。"
+                          "profile 为空则查询全部profile的，非空则查询指定"
+                          "profile的（多开区分）。用于抓包的Chrome的实时读取"
+                          "用 query_cookies_cdp")
     async def query_cookies(
         url: str = Field(..., description="目标URL或域名/IP（必填）"),
         profile: int = Field(
@@ -594,6 +596,63 @@ def create_mcp_server(config, capture, store, executor):
             "keys": [c["name"] for c in (cookies or [])],
             "cookie_header": CookieStore.cookie_header(cookies or []),
             "authorization": auth or "",
+        }
+
+    @mcp.tool(name="query_cookies_cdp",
+              description="经CDP实时读取用于抓包的Chrome的Cookie、Authorization"
+                          "（与 query_cookies 的区别：query_cookies 查日常 Chrome "
+                          "经插件推送的快照，本工具实时读抓包 Chrome 内存中的"
+                          "Cookie——含 httpOnly 与分区 Cookie，抓包 Chrome 中已"
+                          "登录目标网站即可获取；生成脚本期间验证登录态用本工具）。"
+                          "Cookie 按浏览器语义匹配（domain带前置点匹配主域+子域，"
+                          "host-only精确匹配）；Authorization 为抓包期间观察到的"
+                          "请求头缓存（精确主机匹配）——需先开始抓包再操作页面才"
+                          "有，服务重启后清空。抓包 Chrome 未启动/CDP端口不可达"
+                          "且无 Authorization 命中时返回错误")
+    async def query_cookies_cdp(
+        url: str = Field(..., description="目标URL或域名/IP（必填）"),
+        port: int = Field(
+            None, description="CDP调试端口：空则使用配置端口（默认9222），"
+                              "仅影响Cookie读取"),
+    ) -> dict:
+        """与 HTTP /api/cookies/cdp 同口径（api/api.md 第 2 节）。
+
+        补齐纯 MCP 客户端无法调 HTTP 接口的缺口：AI 驱动的抓包会话中
+        登录态在抓包 Chrome 里（插件快照的日常 Chrome 可能未登录），
+        生成脚本期间的直连验证需要经 MCP 取登录态。查询留痕与 HTTP
+        接口一致（cookie_query.log，source=cdp）。
+        """
+        from . import cookie_cdp
+        from app.cookie_query_log import log_cookie_query
+        from app.cookie_store import CookieStore
+        cdp_port = port or config.get("cdp_port")
+        host = cookie_cdp.parse_host(url)
+        if not host:
+            return {"ok": False, "error": "缺少 url 参数或无法解析主机名"}
+        cookies, cookie_err = await cookie_cdp.query_cdp(url, cdp_port)
+        auth_entry = cookie_cdp.auth_cache.get(host)
+        # 404 兼容口径：cookie 与 Authorization 均无命中才报错，任一
+        # 命中即成功（纯 Authorization 命中时 cookies 为空、cookie_error
+        # 透出 Cookie 侧原因）
+        if cookie_err and not auth_entry:
+            log_cookie_query("cdp", url, host, ok=False,
+                             scope="port=%d" % cdp_port, error=cookie_err)
+            return {"ok": False, "error": cookie_err}
+        cookies = cookies or []
+        log_cookie_query(
+            "cdp", url, host, ok=True, count=len(cookies),
+            keys=[c["name"] for c in cookies], auth_hit=bool(auth_entry),
+            scope="port=%d" % cdp_port)
+        return {
+            "ok": True,
+            "source": "cdp",
+            "cdp_port": cdp_port,
+            "count": len(cookies),
+            "keys": [c["name"] for c in cookies],
+            "cookie_header": CookieStore.cookie_header(cookies),
+            "authorization": auth_entry["value"] if auth_entry else "",
+            "observed_at": auth_entry["observed_at"] if auth_entry else None,
+            "cookie_error": cookie_err or "",
         }
 
     return mcp

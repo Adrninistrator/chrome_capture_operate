@@ -26,6 +26,13 @@ KEY_SCHEDULES = "schedules"   # 定时执行任务（结构化，Scheduler 读�
 KEY_MULTI_PROFILE = "chrome_multi_profile"  # Chrome 多开实例（结构化，webapp 读写）
 KEY_FAVORITE_PAGES = "favorite_pages"  # 收藏的页面记录（结构化，webapp 读写）
 KEY_TRAY_SCRIPTS = "tray_scripts"  # 系统托盘快速执行脚本列表（结构化，webapp 读写）
+KEY_LOGIN_ACCOUNTS = "login_accounts"  # 自动登录账号信息（纯扁平 Map，webapp 读写）：
+# {key: value, ...}
+# key 整体作为参数名称（如 volc_username），不拆分、不解析、不设置账号标识层；
+# value 为实际值。生成的脚本通过 POST /api/browser/actions 的 value_from
+# 指定参数名称，由主应用解析后填入页面。
+# 所有值均按明文保存、返回与展示（不做掩码）
+KEY_LOGIN_URL = "login_url"  # 自动登录脚本使用的登录网址（d 标签页文本框输入）
 KEY_EXTENSION_ID = "extension_id"  # 解压版 Chrome 插件 ID（插件设置页
 # 连接插件用；ID 与加载路径相关，人工从 chrome://extensions 复制配置一次；
 # 注册表安装版 ID 由服务自动识别，无需配置）

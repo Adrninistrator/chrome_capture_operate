@@ -20,6 +20,7 @@ from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse)
 from pydantic import BaseModel
 from starlette.staticfiles import StaticFiles
 
+from . import browser_actions as browser_actions_mod
 from . import chrome_proc
 from . import cookie_cdp
 from . import cookie_query_log
@@ -30,9 +31,9 @@ from .capture import (MARK_SUFFIX, STATE_IDLE, CaptureManager,
                       noise_candidates_from_index, parse_index_records,
                       purge_history_session, rename_with_retry,
                       session_path)
-from .config import (ANALYSIS_GUIDE_PATH, API_DOC_PATH, BASE_DIR, EXTENSION_DIR,
-                     LOG_DIR, PROJECT_ROOT, SCRIPTS_EXAMPLE_DIR, Config,
-                     ensure_dirs, get_auto_start)
+from .config import (ANALYSIS_GUIDE_PATH, API_DOC_PATH, AUTO_LOGIN_GUIDE_PATH,
+                     BASE_DIR, EXTENSION_DIR, LOG_DIR, PROJECT_ROOT,
+                     SCRIPTS_EXAMPLE_DIR, Config, ensure_dirs, get_auto_start)
 from .cookie_store import CookieStore
 from .executor import Executor, list_scripts, script_roots
 from .scheduler import Scheduler, describe_schedule
@@ -50,6 +51,47 @@ SCOPE_LABELS = {"req_header": "请求头", "req_body": "请求body",
 def _under_script_roots(p):
     """路径是否位于任一脚本根目录（示例/用户自定义）内。"""
     return any(p.startswith(r + os.sep) for r in script_roots())
+
+
+# ---------------- 登录账号信息（global_conf.json 的 login_accounts） ----------------
+# 纯扁平 Map：{"key": "value", ...}
+# key 整体作为参数名称，不拆分、不假设命名规则；value 为实际值（明文）。
+# 登录网址保存在 login_url。
+_LOGIN_KEY_MAX = 200
+_LOGIN_VALUE_MAX = 500
+
+
+def _read_login_accounts():
+    """读取纯扁平登录账号 Map。"""
+    v = globalconf.get_json(globalconf.KEY_LOGIN_ACCOUNTS, {})
+    if not isinstance(v, dict):
+        return {}
+    # 只接受标量值；旧结构的嵌套对象不迁移、不展示
+    return {str(k): "" if x is None else str(x)
+            for k, x in v.items() if not isinstance(x, (dict, list))}
+
+
+def _write_login_accounts(m):
+    """写入 login_accounts（复用 globalconf 文件锁）。成功返回 True。"""
+    return globalconf.set_json(globalconf.KEY_LOGIN_ACCOUNTS, m)
+
+
+def _normalize_login_key(key):
+    key = str(key or "").strip()
+    if not key:
+        return None, "参数名称不能为空"
+    if len(key) > _LOGIN_KEY_MAX:
+        return None, "参数名称过长（最多 %d 个字符）" % _LOGIN_KEY_MAX
+    if "\r" in key or "\n" in key:
+        return None, "参数名称不能包含换行"
+    return key, None
+
+
+def _normalize_login_value(value):
+    value = "" if value is None else str(value)
+    if len(value) > _LOGIN_VALUE_MAX:
+        return None, "值过长（最多 %d 个字符）" % _LOGIN_VALUE_MAX
+    return value, None
 
 
 def _split_md(content):
@@ -1075,7 +1117,8 @@ def create_app(tray_on_change=None, tray_notify=None):
             "心跳可在忽略的URI规则（uri_rules，prefix 前缀匹配）中排除\n"
             "# 验证要求\n"
             "写脚本前，对从抓包/页面推断出的每个关键假设（filter参数格式、可选值、"
-            "分页行为、空值与日期等边界语义）先用 /api/cookies/cdp 获取登录态、"
+            "分页行为、空值与日期等边界语义）先获取登录态（经 chrome-operate 的"
+            " query_cookies_cdp 工具，或 GET /api/cookies/cdp；两者同口径）、"
             "直连接口实测验证，验证结果（含实测数字）写入 baseline.md\n"
             "注意：页面UI生成的请求格式未必是接口的有效格式，以直连实测为准；"
             "\"返回0条\"既可能是格式无效也可能是数据确实为空，"
@@ -1282,6 +1325,13 @@ def create_app(tray_on_change=None, tray_notify=None):
                     {"error": "指定的目录不存在，请填写存在的合法目录路径"},
                     status_code=400)
             value = os.path.abspath(value)
+        # 登录网址：非空时必须是 http/https 完整地址
+        if body.key == globalconf.KEY_LOGIN_URL and value:
+            u = urlsplit(value)
+            if u.scheme not in ("http", "https") or not u.netloc:
+                return JSONResponse(
+                    {"error": "登录网址必须是 http/https 完整地址"},
+                    status_code=400)
         if not globalconf.set_value(body.key, value):
             return JSONResponse({"error": "写入全局配置文件失败"},
                                 status_code=500)
@@ -1550,9 +1600,10 @@ def create_app(tray_on_change=None, tray_notify=None):
             "chrome-operate 获取路径",
             "# 验证要求",
             "写脚本前，对从抓包/页面推断出的每个关键假设（filter参数格式、"
-            "可选值、分页行为、空值与日期等边界语义）先用 /api/cookies/cdp "
-            "获取登录态、直连接口实测验证，验证结果（含实测数字）写入 "
-            "baseline.md",
+            "可选值、分页行为、空值与日期等边界语义）先用 chrome-operate 的"
+            " query_cookies_cdp 工具获取登录态（抓包Chrome实时读取，或"
+            " GET /api/cookies/cdp），直连接口实测验证，验证结果（含实测"
+            "数字）写入 baseline.md",
             "注意：页面UI生成的请求格式未必是接口的有效格式，以直连实测为准；"
             "\"返回0条\"既可能是格式无效也可能是数据确实为空，"
             "需换一组已知有数据的条件交叉验证后再下结论",
@@ -1583,6 +1634,179 @@ def create_app(tray_on_change=None, tray_notify=None):
         ]
         return {"prompt": "\n".join(lines),
                 "scripts_root_configured": bool(scripts_root)}
+
+    # ---------------- 自动登录脚本提示词（2026-10-20） ----------------
+    @app.get("/api/login_script_prompt")
+    async def login_script_prompt(request: Request):
+        """生成自动登录脚本的提示词模板（仅提示词分发，不实现登录执行）。
+
+        动态注入 api/auto-login-guide.md 完整路径与脚本保存目录；未配置
+        脚本目录时返回 400（与"生成脚本提示词模板"同口径）。
+        """
+        scripts_root = (globalconf.get_value(
+            globalconf.KEY_SCRIPTS_DIR) or "").strip()
+        if not scripts_root:
+            return JSONResponse(
+                {"error": "尚未配置保存生成的Python脚本文件根目录，"
+                          "请先在快速执行脚本页面配置"},
+                status_code=400)
+        base = str(request.base_url).rstrip("/")
+        params_api = base + "/api/login_accounts/params"
+        browser_api = base + "/api/browser/actions"
+        chrome_start_api = base + "/api/chrome/start"
+        text = (
+            "# 任务参数\n"
+            "- 登录网址：__LOGIN_URL__\n"
+            "- 登录账号等参数映射：\n"
+            "__LOGIN_MAPPINGS__\n"
+            "\n"
+            "# MCP工具\n"
+            "- chrome-devtools-attach：分析抓包 Chrome 的页面与网络\n"
+            "- chrome-operate：抓包、获取抓包会话与记录、run_script 运行临时脚本\n"
+            "- 以上 MCP 仅用于脚本生成阶段；生成的 login.py 不得使用 MCP。\n"
+            "\n"
+            "# 脚本实现要求\n"
+            "- 启动抓包 Chrome：POST __CHROME_START_URL__\n"
+            "- 浏览器操作接口：POST __BROWSER_ACTIONS_URL__\n"
+            "- 详细要求见 %s\n"
+            "\n"
+            "# 输出\n"
+            "在 %s 下生成新的目录；目录内文件与 README 内容按上述文档要求生成。\n"
+        ) % (os.path.abspath(AUTO_LOGIN_GUIDE_PATH),
+             os.path.abspath(scripts_root))
+        return {"prompt": text, "scripts_root": scripts_root,
+                "params_api": params_api, "browser_api": browser_api,
+                "chrome_start_api": chrome_start_api}
+
+    # ---------------- 登录账号信息（global_conf.json 的 login_accounts） ----------------
+    class LoginEntryBody(BaseModel):
+        key: str = ""
+        value: str = ""
+
+    @app.get("/api/login_accounts")
+    async def login_accounts_list():
+        """全部登录账号信息（纯扁平 Map，值明文返回，不做掩码）。"""
+        return {"accounts": _read_login_accounts(),
+                "global_conf_path": os.path.abspath(
+                    globalconf.GLOBAL_CONF_PATH)}
+
+    @app.post("/api/login_accounts")
+    async def login_accounts_create(body: LoginEntryBody):
+        key, err = _normalize_login_key(body.key)
+        if err:
+            return JSONResponse({"error": err}, status_code=400)
+        value, err = _normalize_login_value(body.value)
+        if err:
+            return JSONResponse({"error": err}, status_code=400)
+        m = _read_login_accounts()
+        if key in m:
+            return JSONResponse({"error": "参数名称已存在：%s" % key},
+                                status_code=400)
+        m[key] = value
+        if not _write_login_accounts(m):
+            return JSONResponse({"error": "写入全局配置文件失败"},
+                                status_code=500)
+        log.info("新增登录账号信息: %s", key)
+        return {"ok": True, "key": key}
+
+    @app.put("/api/login_accounts")
+    async def login_accounts_update(body: LoginEntryBody,
+                                    key: str = Query(...)):
+        m = _read_login_accounts()
+        if key not in m:
+            return JSONResponse({"error": "参数名称不存在"}, status_code=404)
+        new_key, err = _normalize_login_key(body.key or key)
+        if err:
+            return JSONResponse({"error": err}, status_code=400)
+        value, err = _normalize_login_value(body.value)
+        if err:
+            return JSONResponse({"error": err}, status_code=400)
+        if new_key != key and new_key in m:
+            return JSONResponse({"error": "参数名称已存在：%s" % new_key},
+                                status_code=400)
+        old_items = list(m.items())
+        m.clear()
+        for k, v in old_items:
+            if k == key:
+                m[new_key] = value
+            else:
+                m[k] = v
+        if not _write_login_accounts(m):
+            return JSONResponse({"error": "写入全局配置文件失败"},
+                                status_code=500)
+        log.info("更新登录账号信息: %s -> %s", key, new_key)
+        return {"ok": True, "key": new_key}
+
+    @app.delete("/api/login_accounts")
+    async def login_accounts_delete(key: str = Query(...)):
+        m = _read_login_accounts()
+        if key not in m:
+            return JSONResponse({"error": "参数名称不存在"}, status_code=404)
+        del m[key]
+        if not _write_login_accounts(m):
+            return JSONResponse({"error": "写入全局配置文件失败"},
+                                status_code=500)
+        log.info("删除登录账号信息: %s", key)
+        return {"ok": True}
+
+    @app.get("/api/login_accounts/params")
+    async def login_accounts_params(key: list[str] = Query(default=[])):
+        """按参数名称返回实际值（生成的登录脚本运行时调用）。"""
+        m = _read_login_accounts()
+        wanted = list(dict.fromkeys(key)) if key else list(m)
+        missing = [k for k in wanted if k not in m]
+        if missing:
+            return JSONResponse(
+                {"error": "参数名称不存在：%s" % ", ".join(missing)},
+                status_code=404)
+        values = {k: m[k] for k in wanted}
+        log.info("查询登录账号信息: keys=%s", ",".join(wanted))
+        return {"ok": True, "params": values}
+
+    # ---------------- 通用浏览器动作（供生成的自动登录脚本通过 HTTP 调用） ----------------
+    class BrowserActionBody(BaseModel):
+        type: str
+        selector: str | None = None
+        value: str | None = None
+        value_from: str | None = None
+        url: str | None = None
+        key: str | None = None
+        contains: str | None = None
+        not_contains: str | None = None
+        state: str | None = None
+        continue_on_timeout: bool = False
+        timeout_ms: int | None = None
+        ms: int | None = None
+
+    class BrowserActionsBody(BaseModel):
+        url: str
+        expected_host: str
+        actions: list[BrowserActionBody]
+        timeout_ms: int = 60000
+
+    @app.post("/api/browser/actions")
+    async def browser_actions_run(body: BrowserActionsBody):
+        """执行一组 Playwright 动作（连接抓包 Chrome，复用标签页）。
+
+        生成脚本只传动作与 value_from 参数名称；账号值由主应用从
+        login_accounts 解析，不返回给调用方，也不记录。
+        """
+        actions = [a.model_dump(exclude_none=True) for a in body.actions]
+        accounts = _read_login_accounts()
+        try:
+            browser_actions_mod.validate_actions(actions, accounts)
+            return await asyncio.to_thread(
+                browser_actions_mod.run_actions,
+                int(config.get("cdp_port") or 9222),
+                body.url, body.expected_host, actions, body.timeout_ms,
+                accounts)
+        except browser_actions_mod.BrowserActionError as e:
+            return JSONResponse(e.to_dict(), status_code=e.status_code)
+        except Exception as e:
+            log.error("浏览器动作执行异常: %s", type(e).__name__)
+            return JSONResponse(
+                {"ok": False, "error": "浏览器动作执行异常"},
+                status_code=500)
 
     @app.get("/api/api_md_path")
     async def api_md_path():

@@ -58,6 +58,15 @@ input[type=text], input[type=number] { padding: 4px 6px; border: 1px solid #ccc;
 #popup { background: #fff; margin: 4vh auto; width: 86%; max-width: 1100px; height: 88vh; border-radius: 8px; display: flex; flex-direction: column; overflow: hidden; }
 #popup header { background: #1f3a5f; }
 #popup .body { flex: 1; overflow: hidden; display: flex; flex-direction: column; padding: 10px; gap: 10px; }
+/* 登录账号信息管理 / 编辑窗口（叠加在 AI自主操作Chrome 弹窗之上） */
+#overlay3 { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.3); z-index: 120; }
+#popup3 { background: #fff; margin: 8vh auto; width: 70%; max-width: 820px; max-height: 80vh; border-radius: 8px; display: flex; flex-direction: column; overflow: hidden; }
+#popup3 header { background: #1f3a5f; }
+#popup3 .body { flex: 1; overflow: auto; display: flex; flex-direction: column; padding: 12px; gap: 8px; }
+#overlay4 { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 130; }
+#popup4 { background: #fff; margin: 14vh auto; width: 60%; max-width: 720px; max-height: 70vh; border-radius: 8px; display: flex; flex-direction: column; overflow: hidden; }
+#popup4 header { background: #1f3a5f; }
+#popup4 .body { flex: 1; overflow: auto; display: flex; flex-direction: column; padding: 12px; gap: 8px; }
 #popup .pane { flex: 1; overflow: auto; border: 1px solid #ddd; border-radius: 4px; padding: 8px; background: #fbfcfd; }
 pre { margin: 0; font-family: Consolas, monospace; font-size: 12px; white-space: pre-wrap; word-break: break-all; }
 /* 可编辑 markdown 编辑器：高亮层与输入层同度量叠放，两层字体/行高/换行必须
@@ -66,6 +75,9 @@ pre { margin: 0; font-family: Consolas, monospace; font-size: 12px; white-space:
 .md-edit pre { position: absolute; inset: 0; padding: 10px; overflow: hidden; pointer-events: none; }
 .md-edit textarea { position: absolute; inset: 0; padding: 10px; border: none; background: transparent; color: transparent; caret-color: #333; resize: none; outline: none; white-space: pre-wrap; word-break: break-all; }
 .md-edit pre, .md-edit textarea { line-height: 1.6; }
+/* 只读提示词：灰色背景 + 默认光标，明确不可编辑 */
+.readonly-prompt { flex: 1; min-height: 0; overflow: auto; border: 1px solid #d9dee5; border-radius: 4px; background: #f2f4f7; padding: 10px; cursor: default; }
+.readonly-prompt pre { white-space: pre-wrap; word-break: break-all; }
 .md-edit pre .md-h { font-size: 12px; }
 .md-edit pre .md-code { padding: 0; }
 pre .rl { color: #0b5cad; font-weight: 700; }
@@ -153,7 +165,7 @@ button.btn.chrome-top:disabled { background: #ccd3da; color: #f4f6f8; cursor: de
 <header>
   <h1>chrome_capture_operate</h1>
   <span id="status">加载中…</span>
-  <button id="btnAiOps" style="margin-left:auto" title="打开AI自主操作Chrome页面：依赖环境准备、AI Agent MCP配置说明与提示词模板（打开时自动复制）">AI自主操作Chrome</button>
+  <button id="btnAiOps" style="margin-left:auto" title="打开AI自主操作Chrome页面：依赖环境准备、AI Agent MCP配置说明、页面操作脚本提示词与自动登录脚本提示词（打开时自动复制）">AI自主操作Chrome</button>
   <button id="btnManualOps" title="人工在Chrome执行操作后由AI生成脚本：查看完整操作步骤">人工操作后AI生成脚本</button>
   <button id="btnRunScript" title="查看执行生成的脚本的前提与执行方式说明">执行生成的脚本</button>
   <button id="btnInstallExtManual" class="primary" title="打开人工安装说明：展示Chrome插件管理页面地址与插件目录（均可复制），并说明人工安装步骤">安装Chrome插件-人工</button>
@@ -437,11 +449,28 @@ button.btn.chrome-top:disabled { background: #ccd3da; color: #f4f6f8; cursor: de
     <div class="body" id="popBody"></div>
   </div>
 </div>
+<!-- 登录账号信息管理：数据保存在全局配置文件（叠加在 AI自主操作Chrome 弹窗之上） -->
+<div id="overlay3">
+  <div id="popup3">
+    <header><h1 id="popTitle3">登录账号信息管理</h1><button class="btn warn" onclick="closePop3()" title="关闭管理窗口">关闭</button></header>
+    <div class="body" id="popBody3"></div>
+  </div>
+</div>
+<!-- 新增/编辑登录账号信息：独立编辑窗口 -->
+<div id="overlay4">
+  <div id="popup4">
+    <header><h1 id="popTitle4">新增登录账号信息</h1><button class="btn warn" onclick="closePop4()" title="关闭编辑窗口">关闭</button></header>
+    <div class="body" id="popBody4"></div>
+  </div>
+</div>
 
 <script>
 const $ = s => document.querySelector(s);
 let curSession = null, curScript = null, execId = null, execTimer = null, curCaptureSession = null, histRecords = [], curScriptDir = null;
 let execDone = null, multiRun = null, execPrefix = '';
+// d. 自动登录脚本提示词：扁平账号信息、本次页面的“页面输入字段描述 -> 参数名称”映射
+let loginAccounts = {}, loginConfPath = '', loginMappings = [];
+let loginPromptTemplate = '', loginBrowserApi = '', loginChromeStartApi = '', loginPromptReady = false;
 /* 执行/执行多次按钮的启用状态：选中脚本即可执行；执行多次期间
    （multiRun）与任何一次执行进行中（execTimer）不允许再开始多次执行 */
 function updateRunButtons() {
@@ -671,7 +700,8 @@ function pollExtTask(once) {
   if (!once) extTaskTimer = setInterval(tick, 1500);
 }
 
-// 页头"AI自主操作Chrome"：弹窗三个 TAB（a. 依赖环境准备 + b. AI Agent MCP配置 + c. 提示词模板）
+// 页头"AI自主操作Chrome"：弹窗五个 TAB（a. 依赖环境准备 + b. AI Agent MCP配置 +
+// c. 页面操作脚本提示词 + d. 自动登录脚本提示词（登录网址 + 参数映射 + 只读提示词）
 // 需求：打开页面时提示词模板自动复制到剪贴板，另有复制按钮；
 // a 中提供启动/检测用于抓包的Chrome（与抓包页同款按钮与状态）；
 // b 分两种情况（上下用框包围）：使用Claude Code（输入项目目录一键写入
@@ -680,6 +710,16 @@ $('#btnAiOps').onclick = async () => {
   const r = await api('/api/ai_prompt');
   if (r.error) { toastMsg('获取提示词模板失败：' + r.error, 'err', 5000); return; }
   const st = await api('/api/status');
+  const lp = await api('/api/login_script_prompt');   // 自动登录脚本提示词（可能未配置脚本目录）
+  const la = await api('/api/login_accounts');        // 登录账号信息（扁平 key-value）
+  const lu = await api('/api/global_conf?key=login_url');
+  loginAccounts = Object.assign({}, (la && la.accounts) || {});
+  loginConfPath = (la && la.global_conf_path) || '';
+  loginPromptTemplate = (lp && lp.prompt) || '';
+  loginBrowserApi = (lp && lp.browser_api) || '';
+  loginChromeStartApi = (lp && lp.chrome_start_api) || '';
+  loginMappings = [];                                 // 仅当前页面会话有效，不持久化
+  const loginUrlValue = (lu && lu.value) || '';
   const cdp = st.cdp_port || 9222, port = st.port || 33445;
   $('#popTitle').textContent = 'AI自主操作Chrome';
   $('#popBody').innerHTML =
@@ -688,7 +728,8 @@ $('#btnAiOps').onclick = async () => {
     '<div class="tabs">' +
     '<button class="tab-btn active" data-tab="aidep" title="AI自主操作Chrome所需的依赖环境说明，以及启动/检测用于抓包的Chrome">a. 依赖环境准备</button>' +
     '<button class="tab-btn" data-tab="aimcp" title="AI Agent的MCP配置：使用Claude Code可一键写入配置，使用其他AI Agent复制安装命令">b. AI Agent MCP配置</button>' +
-    '<button class="tab-btn" data-tab="aip" title="AI自主操作的提示词模板（打开窗口时已自动复制）">c. 提示词模板</button></div>' +
+    '<button class="tab-btn" data-tab="aip" title="AI自主操作页面并生成脚本的提示词模板（打开窗口时已自动复制）">c. 页面操作脚本提示词</button>' +
+    '<button class="tab-btn" data-tab="ailogin" title="生成自动登录脚本的提示词（只读，按登录网址与参数映射自动生成；打开本标签页时自动复制）">d. 自动登录脚本提示词</button></div>' +
     '<div class="tab-panel active" id="panel-aidep" style="font-size:13px;line-height:1.9;overflow:auto">' +
     '<table style="max-width:560px"><tr><th style="width:170px">依赖</th><th>安装方式</th></tr>' +
     '<tr><td>Chrome浏览器</td><td>下载安装包并安装</td></tr>' +
@@ -728,15 +769,45 @@ $('#btnAiOps').onclick = async () => {
     '<div class="md-edit"><pre id="mdHl2"></pre>' +
     '<textarea id="popEdit2" spellcheck="false"></textarea></div>' +
     '<div class="row" style="padding:4px 0"><button class="btn" id="popCopy2" title="复制编辑框中的全部内容到剪贴板">复制</button></div>' +
+    '</div>' +
+    // d. 自动登录脚本提示词（只读；按上方登录网址与参数映射自动生成）
+    '<div class="tab-panel" id="panel-ailogin" style="display:none;flex-direction:column;flex:1;min-height:0">' +
+    '<div class="row" style="margin:4px 0 8px;flex-wrap:wrap;gap:8px;align-items:center">' +
+    '<b>登录网址</b>' +
+    '<input type="text" id="loginUrlInput" style="flex:1;min-width:320px" placeholder="https://example.com/login" title="登录页完整地址（http/https）；保存到全局配置文件，提示词中自动使用">' +
+    '<span id="loginUrlMsg" class="muted"></span></div>' +
+    '<div class="row" style="margin:0 0 4px;flex-wrap:wrap;gap:8px;align-items:center">' +
+    '<b>登录账号等参数映射</b>' +
+    '<span class="muted">（页面输入字段描述 = 网页输入框说明，如 用户名、密码；参数名称 = 全局配置文件中的参数名称）</span>' +
+    '<button class="btn" id="btnLoginAccountManage" title="打开登录账号信息管理页面（数据保存在全局配置文件）">登录账号管理</button>' +
+    '<button class="btn" id="btnLoginMappingAdd" title="新增一条 页面输入字段描述 -> 参数名称 映射">新增映射</button></div>' +
+    '<div style="max-height:180px;overflow:auto;margin:0 0 6px">' +
+    '<table id="loginMappingsTable"><thead><tr><th>页面输入字段描述</th><th>参数名称</th><th style="width:70px">操作</th></tr></thead><tbody></tbody></table>' +
+    '<div class="muted" id="loginMappingsEmpty" style="display:none;padding:6px">（暂无映射，点击“新增映射”添加）</div></div>' +
+    '<div style="margin:0 0 4px"><b>提示词</b><span class="muted">（只读，根据登录网址与参数映射自动生成）</span></div>' +
+    '<div id="loginPromptErr" style="margin:0 0 6px;color:#b3392e;font-weight:700;display:none"></div>' +
+    '<div id="loginPromptWarn" style="margin:0 0 6px;color:#b3392e;font-weight:700;display:none"></div>' +
+    '<div class="readonly-prompt"><pre id="loginPromptView"></pre></div>' +
+    '<div class="row" style="padding:4px 0"><button class="btn" id="popCopy3" title="复制只读提示词到剪贴板">复制</button></div>' +
     '</div></div>';
-  // TAB 切换（提示词模板面板为 flex 列布局，其余为 block）
+  // TAB 切换（c/d 提示词面板为 flex 列布局，其余为 block）
+  let loginPromptCopied = false;
   document.querySelectorAll('#popBody .tab-btn').forEach(btn => {
     btn.onclick = () => {
       document.querySelectorAll('#popBody .tab-btn').forEach(b =>
         b.classList.toggle('active', b === btn));
       document.querySelectorAll('#popBody .tab-panel').forEach(pn =>
         pn.style.display = pn.id === 'panel-' + btn.dataset.tab
-          ? (pn.id === 'panel-aip' ? 'flex' : 'block') : 'none');
+          ? ((pn.id === 'panel-aip' || pn.id === 'panel-ailogin')
+              ? 'flex' : 'block') : 'none');
+      // d 标签页：首次打开时自动复制只读提示词（模板不可用时不复制）
+      if (btn.dataset.tab === 'ailogin') {
+        const text = renderLoginPrompt();
+        if (!loginPromptCopied && text && loginPromptReady) {
+          copyText(text, true);
+          loginPromptCopied = true;
+        }
+      }
     };
   });
   // 可编辑模板 + markdown 高亮（与 showText 同口径）
@@ -748,6 +819,52 @@ $('#btnAiOps').onclick = async () => {
   ta.oninput = () => { render(); textEditDirty = true; };
   ta.onscroll = () => { hl.scrollTop = ta.scrollTop; hl.scrollLeft = ta.scrollLeft; };
   $('#popCopy2').onclick = () => copyText(ta.value);
+
+  // TAB d：登录网址 + 人工映射（页面输入字段描述 -> 参数名称）+ 只读提示词
+  $('#loginUrlInput').value = loginUrlValue;
+  $('#btnLoginAccountManage').onclick = openLoginAccountManager;
+  $('#btnLoginMappingAdd').onclick = () => {
+    const keys = Object.keys(loginAccounts);
+    loginMappings.push({desc: '', key: keys[0] || ''});
+    renderLoginMappings();
+    renderLoginPrompt();
+  };
+  $('#popCopy3').onclick = () => {
+    const text = renderLoginPrompt();
+    if (!loginPromptReady) {
+      toastMsg('请先填写登录网址和参数映射', 'err');
+      return;
+    }
+    if (text) copyText(text);
+  };
+  // 登录网址：失焦/回车保存到全局配置，并刷新提示词
+  const saveLoginUrl = async () => {
+    const url = ($('#loginUrlInput').value || '').trim();
+    const rr = await api('/api/global_conf', {
+      method: 'PUT',
+      body: JSON.stringify({key: 'login_url', value: url})});
+    if (rr.error) {
+      $('#loginUrlMsg').textContent = rr.error;
+      $('#loginUrlMsg').style.color = '#b3392e';
+      return;
+    }
+    $('#loginUrlMsg').textContent = '已保存';
+    $('#loginUrlMsg').style.color = '#187a3c';
+    renderLoginPrompt();
+  };
+  $('#loginUrlInput').oninput = renderLoginPrompt;   // 输入时提示词即时同步
+  $('#loginUrlInput').onchange = saveLoginUrl;
+  $('#loginUrlInput').onkeydown = e => {
+    if (e.key === 'Enter') { e.preventDefault(); saveLoginUrl(); }
+  };
+  if (!loginPromptTemplate) {
+    const msg = (lp && (lp.error || lp.detail)) || '获取提示词模板失败';
+    $('#loginPromptErr').textContent = '无法生成提示词模板：' + msg;
+    $('#loginPromptErr').style.display = '';
+    $('#popCopy3').disabled = true;
+  }
+  renderLoginMappings();
+  renderLoginPrompt();
   // TAB a：打开用于抓包的Chrome（与抓包页同款双态按钮：未启动→启动，已启动→置顶，
   // 文字/tooltip 由 renderState 按状态同步；状态徽标共用 .chromeState）
   $('#btnAiChrome').onclick = chromeToggle;
@@ -959,7 +1076,8 @@ makeDraggable($('#histDrag'), $('#histLeft'), 'hist_left_width');
 makeDraggable($('#execDrag'), $('#execLeft'), 'exec_left_width');
 
 /* ---------- HTTP 文本高亮 ---------- */
-function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+function escAttr(s) { return esc(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
 function highlight(text) {
   const lines = text.split('\n');
   return lines.map((line, i) => {
@@ -1057,6 +1175,9 @@ function closePop(force) {
   }
   textEditDirty = false;
   $('#overlay').style.display = 'none';
+  // 主弹窗关闭时一并关闭叠加的登录账号管理/编辑弹窗
+  if ($('#overlay3')) $('#overlay3').style.display = 'none';
+  if ($('#overlay4')) $('#overlay4').style.display = 'none';
 }
 
 /* 编辑后离开确认（非模态 toast，10 秒无操作自动消失=继续编辑） */
@@ -1145,6 +1266,230 @@ async function viewScriptFile(path, ext) {
   $('#overlay').style.display = 'block';
 }
 $('#overlay').addEventListener('click', e => { if (e.target.id === 'overlay') closePop(); });
+
+/* ---------- 登录账号信息管理（global_conf.json 的 login_accounts） ----------
+   login_accounts 为纯扁平 Map：{key: value}。key 整体使用，不拆分、不解析。
+   管理页面只维护该 Map；d 页面的“页面输入字段描述 -> 参数名称”映射仅当前页面有效。 */
+function closePop3() {
+  $('#overlay3').style.display = 'none';
+}
+function closePop4() {
+  $('#overlay4').style.display = 'none';
+}
+
+function loginKeyOptions(selected) {
+  const keys = Object.keys(loginAccounts);
+  if (selected && !keys.includes(selected)) keys.unshift(selected);
+  let html = '<option value="">（请选择参数名称）</option>';
+  keys.forEach(k => {
+    const missing = !Object.prototype.hasOwnProperty.call(loginAccounts, k);
+    html += `<option value="${escAttr(k)}"${k === selected ? ' selected' : ''}>${esc(k)}${missing ? '（已删除）' : ''}</option>`;
+  });
+  return html;
+}
+
+function renderLoginMappings() {
+  const tbody = document.querySelector('#loginMappingsTable tbody');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+  const empty = document.getElementById('loginMappingsEmpty');
+  if (empty) empty.style.display = loginMappings.length ? 'none' : '';
+  loginMappings.forEach((m, i) => {
+    const tr = document.createElement('tr');
+    const tdDesc = document.createElement('td');
+    const inp = document.createElement('input');
+    inp.type = 'text';
+    inp.value = m.desc || '';
+    inp.placeholder = '如 用户名、密码';
+    inp.style.width = '100%';
+    inp.oninput = () => { loginMappings[i].desc = inp.value; renderLoginPrompt(); };
+    tdDesc.appendChild(inp);
+    const tdKey = document.createElement('td');
+    const sel = document.createElement('select');
+    sel.style.width = '100%';
+    sel.innerHTML = loginKeyOptions(m.key || '');
+    sel.onchange = () => { loginMappings[i].key = sel.value; renderLoginPrompt(); };
+    tdKey.appendChild(sel);
+    const tdOp = document.createElement('td');
+    const del = document.createElement('button');
+    del.className = 'link'; del.textContent = '删除';
+    del.title = '删除该映射';
+    del.onclick = () => {
+      loginMappings.splice(i, 1);
+      renderLoginMappings();
+      renderLoginPrompt();
+    };
+    tdOp.appendChild(del);
+    tr.append(tdDesc, tdKey, tdOp);
+    tbody.appendChild(tr);
+  });
+}
+
+function renderLoginPrompt() {
+  const view = document.getElementById('loginPromptView');
+  if (!view || !loginPromptTemplate) return '';
+  const urlInput = document.getElementById('loginUrlInput');
+  const url = ((urlInput && urlInput.value) || '').trim();
+  const mappings = loginMappings.filter(
+    m => (m.desc || '').trim() || (m.key || '').trim());
+  const missing = [];
+  if (!url) missing.push('登录网址');
+  if (!mappings.length) missing.push('至少一条参数映射');
+  if (mappings.some(m => !(m.desc || '').trim())) {
+    missing.push('参数映射的页面输入字段描述');
+  }
+  if (mappings.some(m => !(m.key || '').trim())) {
+    missing.push('参数映射的参数名称');
+  }
+  if (mappings.some(m => (m.key || '').trim()
+      && !Object.prototype.hasOwnProperty.call(loginAccounts, m.key))) {
+    missing.push('参数映射的参数名称已不存在');
+  }
+  loginPromptReady = missing.length === 0;
+  const warn = document.getElementById('loginPromptWarn');
+  if (warn) {
+    warn.textContent = missing.length
+      ? '请先填写：' + Array.from(new Set(missing)).join('、') : '';
+    warn.style.display = missing.length ? '' : 'none';
+  }
+  const copyBtn = document.getElementById('popCopy3');
+  if (copyBtn) copyBtn.disabled = !loginPromptReady;
+  const mappingLines = mappings.length
+    ? mappings.map(m =>
+        '- ' + (m.desc || '（未填写描述）') +
+        '的值对应全局配置文件账号信息中的 ' +
+        (m.key || '（未选择参数）') + ' 参数值').join('\n')
+    : '- （未配置）';
+  let text = loginPromptTemplate;
+  text = text.split('__LOGIN_URL__').join(url || '（未填写）');
+  text = text.split('__LOGIN_MAPPINGS__').join(mappingLines);
+  text = text.split('__CHROME_START_URL__').join(
+    loginChromeStartApi || '（未配置接口）');
+  text = text.split('__BROWSER_ACTIONS_URL__').join(
+    loginBrowserApi || '（未配置接口）');
+  view.innerHTML = highlightMarkdown(text) + '\n';
+  return text;
+}
+
+async function loadLoginAccounts() {
+  const rr = await api('/api/login_accounts');
+  if (rr.error) { toastMsg(rr.error, 'err'); return false; }
+  loginAccounts = Object.assign({}, rr.accounts || {});
+  loginConfPath = rr.global_conf_path || '';
+  renderLoginMappings();
+  renderLoginPrompt();
+  renderLoginAccountsTable();
+  return true;
+}
+
+function renderLoginAccountsTable() {
+  const tbody = document.querySelector('#loginAccountsTable tbody');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+  const entries = Object.entries(loginAccounts);
+  const empty = document.getElementById('loginAccountsEmpty');
+  if (empty) empty.style.display = entries.length ? 'none' : '';
+  const pathEl = document.getElementById('loginConfPath3');
+  if (pathEl) pathEl.textContent = loginConfPath;
+  entries.forEach(([k, v]) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${esc(k)}</td><td>${esc(v)}</td><td></td>`;
+    const td = tr.lastChild;
+    const ed = document.createElement('button');
+    ed.className = 'link'; ed.textContent = '编辑';
+    ed.title = '编辑该参数名称与参数值';
+    ed.onclick = () => openLoginEntryEditor(k, k, v);
+    const del = document.createElement('button');
+    del.className = 'link'; del.textContent = '删除';
+    del.title = '删除该参数名称（需二次点击确认）';
+    del.onclick = async () => {
+      if (!del.dataset.armed) { armConfirm(del, '再次点击确认删除', 4); return; }
+      disarmConfirm(del);
+      const rr = await api(
+        '/api/login_accounts?key=' + encodeURIComponent(k),
+        {method: 'DELETE'});
+      if (rr.error) { toastMsg(rr.error, 'err'); return; }
+      toastMsg('已删除：' + k, 'ok');
+      await loadLoginAccounts();
+    };
+    td.append(ed, del);
+    tbody.appendChild(tr);
+  });
+}
+
+function openLoginAccountManager() {
+  $('#popTitle3').textContent = '登录账号信息管理';
+  $('#popBody3').innerHTML =
+    '<div style="font-size:13px">保存在全局配置文件：' +
+    '<code id="loginConfPath3" style="font-family:Consolas,monospace;word-break:break-all">' +
+    esc(loginConfPath || '') + '</code></div>' +
+    '<div class="row">' +
+    '<button class="btn" id="btnLaAdd" title="新增参数">新增</button>' +
+    '<button class="btn" id="btnLaRefresh" title="重新加载">刷新</button></div>' +
+    '<div style="max-height:50vh;overflow:auto">' +
+    '<table id="loginAccountsTable"><thead><tr><th>参数名称</th><th>参数值</th>' +
+    '<th style="width:100px">操作</th></tr></thead><tbody></tbody></table>' +
+    '<div class="muted" id="loginAccountsEmpty" style="display:none;padding:6px">（暂无数据）</div></div>';
+  $('#btnLaAdd').onclick = () => openLoginEntryEditor(null, '', '');
+  $('#btnLaRefresh').onclick = loadLoginAccounts;
+  $('#overlay3').style.display = 'block';
+  renderLoginAccountsTable();
+  loadLoginAccounts();   // 打开时重新拉取，确保路径与数据最新
+}
+
+function openLoginEntryEditor(oldKey, key, value) {
+  const isEdit = oldKey !== null && oldKey !== undefined;
+  $('#popTitle4').textContent = isEdit ? '编辑登录账号信息' : '新增登录账号信息';
+  $('#popBody4').innerHTML =
+    '<div class="cfg-box" style="font-size:13px">' +
+    '<div class="row"><label style="display:inline-flex;align-items:center;gap:6px;flex:1">参数名称 ' +
+    '<input type="text" id="laKey" style="flex:1;min-width:320px" placeholder="如 volc_username"></label></div>' +
+    '<div class="row"><label style="display:inline-flex;align-items:center;gap:6px;flex:1">参数值 ' +
+    '<input type="text" id="laValue" style="flex:1;min-width:320px" placeholder="参数值"></label></div>' +
+    '<div class="row" style="padding:8px 0 0">' +
+    '<button class="btn" id="btnLaSave" title="保存参数">保存</button>' +
+    '<button class="btn" id="btnLaCancel" title="取消编辑">取消</button>' +
+    '<span id="laMsg" class="muted"></span></div></div>';
+  $('#laKey').value = key || '';
+  $('#laValue').value = value || '';
+  $('#laMsg').textContent = '';
+  const save = async () => {
+    const payload = {key: $('#laKey').value.trim(), value: $('#laValue').value};
+    if (!payload.key) {
+      $('#laMsg').textContent = '参数名称不能为空';
+      $('#laMsg').style.color = '#b3392e';
+      return;
+    }
+    const rr = await api(
+      isEdit ? '/api/login_accounts?key=' + encodeURIComponent(oldKey)
+             : '/api/login_accounts',
+      {method: isEdit ? 'PUT' : 'POST', body: JSON.stringify(payload)});
+    if (rr.error) {
+      $('#laMsg').textContent = rr.error;
+      $('#laMsg').style.color = '#b3392e';
+      return;
+    }
+    // 编辑时如果修改了 key，同步更新本次页面已添加的映射
+    if (isEdit && rr.key && rr.key !== oldKey) {
+      loginMappings.forEach(m => { if (m.key === oldKey) m.key = rr.key; });
+    }
+    toastMsg(isEdit ? '已更新登录账号信息' : '已新增登录账号信息', 'ok');
+    closePop4();
+    await loadLoginAccounts();
+  };
+  $('#btnLaSave').onclick = save;
+  $('#btnLaCancel').onclick = closePop4;
+  $('#laValue').onkeydown = e => { if (e.key === 'Enter') save(); };
+  $('#overlay4').style.display = 'block';
+  setTimeout(() => $('#laKey').focus(), 0);
+}
+
+$('#overlay3').addEventListener('click', e => {
+  if (e.target.id === 'overlay3') closePop3();
+});
+$('#overlay4').addEventListener('click', e => {
+  if (e.target.id === 'overlay4') closePop4();
+});
 
 /* ---------- 状态 & WebSocket ---------- */
 let lastCapState = null;

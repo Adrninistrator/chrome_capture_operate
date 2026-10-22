@@ -6,6 +6,10 @@ Authorization，以及生成脚本的约定。
 
 服务默认监听 `http://127.0.0.1:33445`（仅本机；端口以参数配置页实际值为准）。
 
+> 浏览器动作接口（主要供自动登录脚本使用）已拆分到
+> `api/browser-actions.md`；自动登录脚本生成要求见
+> `api/auto-login-guide.md`。
+
 ## 1. 获取指定网址的 Cookie、Authorization
 
 本节接口获取的 Cookie、Authorization 来自**日常使用的 Chrome**（Chrome 插件按启动/变更/定时推送到服务，仅存内存）。
@@ -135,11 +139,22 @@ GET /api/cookies/cdp?url=<URL或域名>[&port=<CDP端口>]
 
 日常 Chrome 未开 CDP 调试端口时依旧只能使用 `/api/cookies/query`（插件链路）。
 
+**来源选择原则**：默认优先 `/api/cookies/query`（日常 Chrome 插件快照），
+返回非 200 或 `cookie_header`/`authorization` 均为空时，再回退
+`/api/cookies/cdp`（抓包 Chrome 实时读取）。注意两个 Chrome 可能登录不同
+账号，回退会让脚本实际使用的身份与预期不一致；需要严格以抓包 Chrome 为准
+（例如自动登录脚本判断登录态）时，应只使用 `/api/cookies/cdp`，不得回退到
+日常 Chrome（否则可能因日常 Chrome 已登录而误判抓包 Chrome 已登录）。
+
+> AI Agent 亦可经 MCP 工具 `query_cookies_cdp`（chrome-operate）以同口径获取——无需直接调用本 HTTP 接口，纯 MCP 客户端也可用。
+
 ## 3. 生成的脚本的编写约定
 
 1. **执行环境**：脚本由本项目的 Python 虚拟环境执行（`.venv`），
    运行方式为 `python -u 脚本路径`，**不传递任何参数**。
 2. **依赖**：优先使用 `requests`（已随工具安装在虚拟环境中）；
+   如脚本需要操作抓包 Chrome 页面，使用 `/api/browser/actions`
+   （见 `api/browser-actions.md`），**不需要** `import playwright`。
    如需其他虚拟环境中不存在的第三方库，提醒人工将其加入
    `chrome_capture_operate_python/requirements.txt` 并重新运行
    `install.bat` 安装。
@@ -150,6 +165,12 @@ GET /api/cookies/cdp?url=<URL或域名>[&port=<CDP端口>]
    UTF-8（写法见第 4 节骨架）。
 4. **HTTPS 证书**：发送 HTTPS 请求时**不要进行证书等任何验证**
    （`requests` 传 `verify=False`），以兼容内部系统的自签/内网证书。
+5. **定时执行**：脚本必须非交互、可无人值守，不能依赖 `input()`、GUI 弹窗
+   或人工处理验证码；必须在 `exec_timeout_sec`（默认 300 秒）内结束，超时会被
+   终止；退出码 0 表示成功，非 0 表示失败；stdout/stderr 写入独立日志；
+   不传参数，工作目录为脚本所在目录；同一任务不会重叠执行，但不同任务可能
+   并发，写共享文件/操作同一 Chrome 时需自行加锁或使用唯一临时文件；
+   定时执行不自动重试，脚本应可重复执行。
 
 ## 4. 脚本示例骨架
 
@@ -167,34 +188,57 @@ COOKIE_API = "http://127.0.0.1:33445/api/cookies/query"
 COOKIE_API_CDP = "http://127.0.0.1:33445/api/cookies/cdp"
 TARGET = "https://www.example.com/api/data"
 
-def get_auth_headers(url):
+def get_auth_headers(url, source="auto"):
     """取 Cookie 与 Authorization 请求头（其一为空即不带）。
 
-    优先日常 Chrome 插件推送的快照（query），无匹配时降级经 CDP 实时
-    读取用于抓包的 Chrome（cdp）——登录态在用于抓包的 Chrome 中时走
-    该路径。
+    source:
+      - "auto"（默认，通用数据脚本）：
+          先查日常 Chrome 快照（/api/cookies/query），未取到时
+          再查抓包 Chrome（/api/cookies/cdp）；
+      - "profile"：只查日常 Chrome（/api/cookies/query）；
+      - "cdp"：只查抓包 Chrome（/api/cookies/cdp）；
+          自动登录/登录态判断必须使用该模式，禁止回退日常 Chrome。
+
+    注意：两个 Chrome 可能登录不同账号。自动登录判断的是抓包 Chrome
+    是否已登录，若先查日常 Chrome 会把“日常 Chrome 已登录”误判为
+    “抓包 Chrome 已登录”，从而跳过本应执行的登录。
     """
+    apis = {
+        "auto": [(COOKIE_API, "日常 Chrome"), (COOKIE_API_CDP, "抓包 Chrome")],
+        "profile": [(COOKIE_API, "日常 Chrome")],
+        "cdp": [(COOKIE_API_CDP, "抓包 Chrome")],
+    }
+    if source not in apis:
+        print("未知 Cookie 来源:", source)
+        sys.exit(1)
     last_err = ""
-    for api in (COOKIE_API, COOKIE_API_CDP):
+    for api, label in apis[source]:
         try:
             r = requests.get(api, params={"url": url},
                              timeout=10, verify=False)
         except requests.RequestException as e:
             print("Cookie 服务不可达（chrome_capture_operate 未启动？）:", e)
             sys.exit(1)
-        if r.status_code == 200:
+        if r.status_code != 200:
+            try:
+                last_err = r.json().get("error", "")
+            except ValueError:
+                last_err = r.text[:200]
+            continue
+        try:
             d = r.json()
-            headers = {}
-            if d.get("cookie_header"):
-                headers["Cookie"] = d["cookie_header"]
-            if d.get("authorization"):
-                headers["Authorization"] = d["authorization"]
-            if headers:
-                return headers
-        else:
-            last_err = r.json().get("error", "")
-    print("获取 Cookie 失败（日常 Chrome 插件与用于抓包的 Chrome 均无该"
-          "站点登录态）:", last_err)
+        except ValueError:
+            last_err = "%s 返回非 JSON 内容" % label
+            continue
+        headers = {}
+        if d.get("cookie_header"):
+            headers["Cookie"] = d["cookie_header"]
+        if d.get("authorization"):
+            headers["Authorization"] = d["authorization"]
+        if headers:
+            return headers
+        last_err = "%s 无 Cookie/Authorization" % label
+    print("获取 Cookie 失败（%s）：%s" % (source, last_err))
     sys.exit(1)
 
 def main():

@@ -36,6 +36,9 @@ SCRIPTS_EXAMPLE_DIR = os.path.join(BASE_DIR, "python_scripts_example")
 SCRIPT_LOG_DIR = os.path.join(LOG_DIR, "scripts")
 API_DOC_PATH = os.path.join(PROJECT_ROOT, "api", "api.md")
 ANALYSIS_GUIDE_PATH = os.path.join(PROJECT_ROOT, "api", "analysis-guide.md")
+# 自动登录脚本的通用实现要求（提示词模板中动态引用其完整路径）
+AUTO_LOGIN_GUIDE_PATH = os.path.join(PROJECT_ROOT, "api",
+                                     "auto-login-guide.md")
 # Chrome 插件目录（页头"安装Chrome插件-人工"按钮复制给用户去加载）
 EXTENSION_DIR = os.path.join(PROJECT_ROOT, "chrome_capture_operate_extension")
 
