@@ -4,7 +4,6 @@
 - 新增 `POST /api/browser/actions`：主应用内部使用 Playwright 连接抓包 Chrome、复用标签页，支持 goto/fill/click/press/wait_for_selector/wait_for_url/wait_for_load_state/wait_for_timeout/get_url/get_text/get_title/is_visible；fill 支持 value_from，由主应用从 login_accounts 解析，账号值不进入生成脚本；等待动作支持 continue_on_timeout，示例脚本不再固定 sleep
 - 生成的登录脚本启动时调用 /api/chrome/start 确保抓包 Chrome 已启动；登录态只使用 /api/cookies/cdp；无登录后抓包时按两阶段流程（先生成 login_bootstrap.py，通过 chrome-operate 的 run_script 运行，登录成功后再分析登录态接口）；MCP 仅用于生成阶段，生成的脚本不使用 MCP/Playwright
 - 文档：新增 api/auto-login-guide.md、api/browser-actions.md；浏览器动作接口从 api/api.md 拆分；提示词模板、README、prompt-生成完整文档更新（独立自动登录章节、test_ 示例、从页面复制提示词）；补充定时执行脚本无人值守要求
-- 测试：自动登录接口、账号 CRUD、浏览器动作校验/value_from、提示词模板、等待动作等；全量 350 passed, 1 skipped
 
 # 20261013
 
