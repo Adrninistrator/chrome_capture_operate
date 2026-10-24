@@ -60,9 +60,12 @@ C:\Users\%username%\.chrome_capture_operate\global_conf.json
 "login_url": "https://example.com/login",
 "login_accounts": {
   "test_username": "登录用户名",
-  "test_password": "登录密码",
+  "test_password": "dpapi:v1:Base64密文...",
   "test_main_account": "主账号（多字段登录时使用）"
-}
+},
+"login_account_secret_keys": [
+  "test_password"
+]
 ```
 
 提示词中的“登录账号等参数映射”给出**页面输入字段描述 -> 参数名称**，例如：
@@ -77,11 +80,18 @@ C:\Users\%username%\.chrome_capture_operate\global_conf.json
 - 生成脚本只保存**参数名称**，不读取、不保存、不打印具体账号值；
 - 填写账号字段时使用动作的 `value_from` 指定参数名称，由主应用从
   `login_accounts` 取值并填入页面；
-- 参数名称不存在时，`/api/browser/actions` 返回明确错误，脚本应打印并退出；
+- 密码类型参数的值使用 Windows DPAPI（用户级）加密存储，名称记录在
+  `login_account_secret_keys`；
+- 管理页面/`GET /api/login_accounts` 对密码类型固定显示 `********`，不返回
+  明文或密文；
+- `/api/login_accounts/params` 不返回密码类型参数；密码类型只能通过
+  `value_from` 在主应用内解密使用；
+- 参数名称不存在、密码解密失败时，`/api/browser/actions` 返回明确错误，
+  脚本应打印并退出；
 - 密码类字段只由主应用填入页面，脚本输出不得出现具体值。
 
-> `/api/login_accounts/params` 仍可用于其他需要取值的脚本；自动登录脚本
-> 不需要调用它，使用 `value_from` 即可。
+> DPAPI 绑定当前 Windows 用户；换用户或换机器后无法解密。若全局配置被复制
+> 到其他环境，密码类型参数需要重新设置。
 
 ## 3. 登录态判断（脚本主流程第一步）
 
@@ -331,7 +341,10 @@ Content-Type: application/json
 5. `get_text` 返回的页面文本可能包含用户名等账号信息，脚本不要原样打印；
    只用于关键词判断，或脱敏后输出；
 6. 不实现验证码/短信/2FA 绕过，只做人工介入提示；
-7. 全局配置文件中的密码为明文（用户目录），不要把该文件放入 Git/云同步目录。
+7. 密码类型参数使用 Windows DPAPI 密文保存，普通参数仍为明文；不要把全局
+   配置文件放入 Git/云同步目录；
+8. DPAPI 绑定当前 Windows 用户；换用户或换机器后密码类型无法解密，需要
+   重新设置。
 
 ## 7. 输出与验证
 

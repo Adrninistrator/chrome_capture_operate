@@ -28,10 +28,12 @@ KEY_FAVORITE_PAGES = "favorite_pages"  # 收藏的页面记录（结构化，web
 KEY_TRAY_SCRIPTS = "tray_scripts"  # 系统托盘快速执行脚本列表（结构化，webapp 读写）
 KEY_LOGIN_ACCOUNTS = "login_accounts"  # 自动登录账号信息（纯扁平 Map，webapp 读写）：
 # {key: value, ...}
-# key 整体作为参数名称（如 volc_username），不拆分、不解析、不设置账号标识层；
-# value 为实际值。生成的脚本通过 POST /api/browser/actions 的 value_from
-# 指定参数名称，由主应用解析后填入页面。
-# 所有值均按明文保存、返回与展示（不做掩码）
+# key 整体作为参数名称（如 test_username），不拆分、不解析、不设置账号标识层；
+# value 为实际值；密码类型参数的 value 为 dpapi:v1:... 密文，普通参数为明文。
+# 生成的脚本通过 POST /api/browser/actions 的 value_from 指定参数名称，
+# 由主应用解析后填入页面。
+KEY_LOGIN_ACCOUNT_SECRETS = "login_account_secret_keys"  # 密码类型参数的名称列表
+# 与 KEY_LOGIN_ACCOUNTS 同锁原子写入；密码类型值在返回/展示时掩码
 KEY_LOGIN_URL = "login_url"  # 自动登录脚本使用的登录网址（d 标签页文本框输入）
 KEY_EXTENSION_ID = "extension_id"  # 解压版 Chrome 插件 ID（插件设置页
 # 连接插件用；ID 与加载路径相关，人工从 chrome://extensions 复制配置一次；
@@ -85,6 +87,20 @@ def set_json(key, value):
     with _lock:
         data = _read_all(GLOBAL_CONF_PATH)
         data[key] = value
+        try:
+            _write_all(GLOBAL_CONF_PATH, data)
+            return True
+        except OSError:
+            return False
+
+
+def set_json_many(values):
+    """一次写入多个 key（同一把锁，避免账号与密码类型元数据不一致）。"""
+    if not isinstance(values, dict):
+        return False
+    with _lock:
+        data = _read_all(GLOBAL_CONF_PATH)
+        data.update(values)
         try:
             _write_all(GLOBAL_CONF_PATH, data)
             return True

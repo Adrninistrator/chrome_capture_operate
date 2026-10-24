@@ -18,7 +18,7 @@
 
 - **提供网站Cookie**：通过Chrome插件与Python应用将Chrome网站的Cookie与Authorization开放为本地HTTP接口（日常Chrome经插件推送，用于抓包的Chrome经CDP实时读取），Chrome插件支持控制需要推送Cookie与Authorization的网站范围，支持网站会话保持；Cookie查询请求逐次留痕到独立日志文件（每天滚动，仅记数量与key），便于安全审计；Chrome插件支持通过程序自动安装，便于非技术人员使用
 
-- **自动登录脚本生成**：d 标签页维护通用账号信息与“页面输入字段描述 -> 参数名称”映射，生成独立的自动登录脚本；脚本启动时确保抓包 Chrome 就绪，判断登录态后按需完成登录；账号值只在主应用中解析，生成脚本中不保存账号信息
+- **自动登录脚本生成**：d 标签页维护通用账号信息与“页面输入字段描述 -> 参数名称”映射，生成独立的自动登录脚本；账号可标记为密码类型，加密保存、页面展示为星号、使用时由主应用解密；脚本启动时确保抓包 Chrome 就绪，判断登录态后按需完成登录；账号值只在主应用中解析，生成脚本中不保存账号信息
 
 - **执行脚本**：生成的脚本可通过Python应用快速执行、定时自动执行、系统托盘执行、手工执行，或由AI Agent或其他程序执行；也提供MCP工具供AI Agent调用
 
@@ -324,8 +324,9 @@ Chrome 已启动时该按钮变为**置顶用于抓包的Chrome进程**，点击
 1. 填写登录网址，保存到全局配置 `login_url`。
 2. 点击 **登录账号管理**：
    - 数据保存在全局配置文件，页面展示完整路径；
-   - 以“参数名称/参数值”维护扁平 Map `login_accounts`；
-   - 参数名称如 `test_main_acct`、`test_sub_username`、`test_pwd`；参数值明文展示。
+   - 以“参数名称/参数值/类型”维护扁平 Map `login_accounts`；
+   - 参数名称如 `test_main_acct`、`test_sub_username`、`test_pwd`；
+   - 可勾选“密码类型”：加密保存，展示为固定 `********`；编辑留空保持原值；取消密码类型时解密为普通值。
 3. 在 d 标签页点击 **新增映射**，逐条配置：
    - 页面输入字段描述，如 主账号、子用户名、密码；
    - 参数名称，从 `login_accounts` 中选择。
@@ -338,7 +339,7 @@ Chrome 已启动时该按钮变为**置顶用于抓包的Chrome进程**，点击
 - 只使用 `/api/cookies/cdp` 读取抓包 Chrome 的 Cookie；
 - 选择一个需要登录才能访问的网站接口判断登录态；
 - 未登录时通过 `POST /api/browser/actions` 完成页面登录；
-- `fill` 使用 `value_from`，账号值只在主应用解析，不进入脚本；
+- `fill` 使用 `value_from`，普通值直接使用、密码类型由主应用解密后使用，账号值不进入脚本；
 - 登录后等待优先使用 `wait_for_url` / `wait_for_selector` / `wait_for_load_state`，固定 `wait_for_timeout` 仅作兜底；
 - 登录后重新取 Cookie 调同一接口复验；
 - 不直接使用 Playwright/CDP，不使用 MCP。

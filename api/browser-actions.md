@@ -78,9 +78,12 @@ Content-Type: application/json
 ```
 
 - 主应用从 `login_accounts` 解析实际值并填入页面；
+- 密码类型参数由主应用使用 Windows DPAPI 解密后填入；解密失败返回 500；
 - 账号值不进入生成的脚本、不出现在请求/响应中、不记录到日志；
 - 参数名称不存在时返回 400，`error` 含具体参数名称；
-- `value` 与 `value_from` 不能同时指定。
+- `value` 与 `value_from` 不能同时指定；
+- `/api/login_accounts` 对密码类型只返回 `********`；
+  `/api/login_accounts/params` 不返回密码类型参数。
 
 ## 4. 响应
 

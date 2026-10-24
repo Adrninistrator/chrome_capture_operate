@@ -469,7 +469,7 @@ const $ = s => document.querySelector(s);
 let curSession = null, curScript = null, execId = null, execTimer = null, curCaptureSession = null, histRecords = [], curScriptDir = null;
 let execDone = null, multiRun = null, execPrefix = '';
 // d. 自动登录脚本提示词：扁平账号信息、本次页面的“页面输入字段描述 -> 参数名称”映射
-let loginAccounts = {}, loginConfPath = '', loginMappings = [];
+let loginAccounts = {}, loginSecretKeys = new Set(), loginConfPath = '', loginMappings = [];
 let loginPromptTemplate = '', loginBrowserApi = '', loginChromeStartApi = '', loginPromptReady = false;
 /* 执行/执行多次按钮的启用状态：选中脚本即可执行；执行多次期间
    （multiRun）与任何一次执行进行中（execTimer）不允许再开始多次执行 */
@@ -714,6 +714,7 @@ $('#btnAiOps').onclick = async () => {
   const la = await api('/api/login_accounts');        // 登录账号信息（扁平 key-value）
   const lu = await api('/api/global_conf?key=login_url');
   loginAccounts = Object.assign({}, (la && la.accounts) || {});
+  loginSecretKeys = new Set((la && la.secret_keys) || []);
   loginConfPath = (la && la.global_conf_path) || '';
   loginPromptTemplate = (lp && lp.prompt) || '';
   loginBrowserApi = (lp && lp.browser_api) || '';
@@ -1375,6 +1376,7 @@ async function loadLoginAccounts() {
   const rr = await api('/api/login_accounts');
   if (rr.error) { toastMsg(rr.error, 'err'); return false; }
   loginAccounts = Object.assign({}, rr.accounts || {});
+  loginSecretKeys = new Set(rr.secret_keys || []);
   loginConfPath = rr.global_conf_path || '';
   renderLoginMappings();
   renderLoginPrompt();
@@ -1392,13 +1394,15 @@ function renderLoginAccountsTable() {
   const pathEl = document.getElementById('loginConfPath3');
   if (pathEl) pathEl.textContent = loginConfPath;
   entries.forEach(([k, v]) => {
+    const secret = loginSecretKeys.has(k);
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${esc(k)}</td><td>${esc(v)}</td><td></td>`;
+    tr.innerHTML = `<td>${esc(k)}</td><td>${secret ? '********' : esc(v)}</td>` +
+      `<td>${secret ? '密码' : '普通'}</td><td></td>`;
     const td = tr.lastChild;
     const ed = document.createElement('button');
     ed.className = 'link'; ed.textContent = '编辑';
     ed.title = '编辑该参数名称与参数值';
-    ed.onclick = () => openLoginEntryEditor(k, k, v);
+    ed.onclick = () => openLoginEntryEditor(k, k, secret ? '' : v, secret);
     const del = document.createElement('button');
     del.className = 'link'; del.textContent = '删除';
     del.title = '删除该参数名称（需二次点击确认）';
@@ -1428,7 +1432,8 @@ function openLoginAccountManager() {
     '<button class="btn" id="btnLaRefresh" title="重新加载">刷新</button></div>' +
     '<div style="max-height:50vh;overflow:auto">' +
     '<table id="loginAccountsTable"><thead><tr><th>参数名称</th><th>参数值</th>' +
-    '<th style="width:100px">操作</th></tr></thead><tbody></tbody></table>' +
+    '<th style="width:70px">类型</th><th style="width:100px">操作</th>' +
+    '</tr></thead><tbody></tbody></table>' +
     '<div class="muted" id="loginAccountsEmpty" style="display:none;padding:6px">（暂无数据）</div></div>';
   $('#btnLaAdd').onclick = () => openLoginEntryEditor(null, '', '');
   $('#btnLaRefresh').onclick = loadLoginAccounts;
@@ -1437,26 +1442,49 @@ function openLoginAccountManager() {
   loadLoginAccounts();   // 打开时重新拉取，确保路径与数据最新
 }
 
-function openLoginEntryEditor(oldKey, key, value) {
+function openLoginEntryEditor(oldKey, key, value, secret) {
   const isEdit = oldKey !== null && oldKey !== undefined;
+  const isEditSecret = isEdit && !!secret;
   $('#popTitle4').textContent = isEdit ? '编辑登录账号信息' : '新增登录账号信息';
   $('#popBody4').innerHTML =
     '<div class="cfg-box" style="font-size:13px">' +
     '<div class="row"><label style="display:inline-flex;align-items:center;gap:6px;flex:1">参数名称 ' +
-    '<input type="text" id="laKey" style="flex:1;min-width:320px" placeholder="如 volc_username"></label></div>' +
+    '<input type="text" id="laKey" style="flex:1;min-width:320px" placeholder="如 test_pwd"></label></div>' +
     '<div class="row"><label style="display:inline-flex;align-items:center;gap:6px;flex:1">参数值 ' +
     '<input type="text" id="laValue" style="flex:1;min-width:320px" placeholder="参数值"></label></div>' +
+    '<div class="row"><label style="display:inline-flex;align-items:center;gap:6px">' +
+    '<input type="checkbox" id="laSecret"> 密码类型（加密保存，展示为星号）</label></div>' +
     '<div class="row" style="padding:8px 0 0">' +
     '<button class="btn" id="btnLaSave" title="保存参数">保存</button>' +
     '<button class="btn" id="btnLaCancel" title="取消编辑">取消</button>' +
     '<span id="laMsg" class="muted"></span></div></div>';
   $('#laKey').value = key || '';
-  $('#laValue').value = value || '';
+  $('#laValue').value = isEditSecret ? '' : (value || '');
+  $('#laSecret').checked = isEditSecret;
+  const syncValueInput = () => {
+    const sec = $('#laSecret').checked;
+    const inp = $('#laValue');
+    inp.type = sec ? 'password' : 'text';
+    if (sec) {
+      inp.placeholder = isEditSecret ? '已设置，留空保持原值' : '请输入密码';
+    } else {
+      inp.placeholder = isEditSecret ? '留空保持并解密原值' : '参数值';
+    }
+  };
+  syncValueInput();
+  $('#laSecret').onchange = syncValueInput;
   $('#laMsg').textContent = '';
   const save = async () => {
-    const payload = {key: $('#laKey').value.trim(), value: $('#laValue').value};
+    const sec = $('#laSecret').checked;
+    const val = $('#laValue').value;
+    const payload = {key: $('#laKey').value.trim(), value: val, secret: sec};
     if (!payload.key) {
       $('#laMsg').textContent = '参数名称不能为空';
+      $('#laMsg').style.color = '#b3392e';
+      return;
+    }
+    if (!isEdit && sec && !val) {
+      $('#laMsg').textContent = '密码类型参数值不能为空';
       $('#laMsg').style.color = '#b3392e';
       return;
     }

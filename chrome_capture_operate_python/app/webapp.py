@@ -22,6 +22,7 @@ from starlette.staticfiles import StaticFiles
 
 from . import browser_actions as browser_actions_mod
 from . import chrome_proc
+from . import secret_store
 from . import cookie_cdp
 from . import cookie_query_log
 from . import globalconf
@@ -55,14 +56,17 @@ def _under_script_roots(p):
 
 # ---------------- 登录账号信息（global_conf.json 的 login_accounts） ----------------
 # 纯扁平 Map：{"key": "value", ...}
-# key 整体作为参数名称，不拆分、不假设命名规则；value 为实际值（明文）。
+# key 整体作为参数名称，不拆分、不假设命名规则；普通 value 为明文；
+# 密码类型参数的 value 为 DPAPI 密文（dpapi:v1:...）。
+# 密码类型参数名称另存于 login_account_secret_keys。
 # 登录网址保存在 login_url。
 _LOGIN_KEY_MAX = 200
 _LOGIN_VALUE_MAX = 500
+_LOGIN_MASK = "********"
 
 
-def _read_login_accounts():
-    """读取纯扁平登录账号 Map。"""
+def _read_login_accounts_raw():
+    """读取存储值（密码类型仍是密文）。"""
     v = globalconf.get_json(globalconf.KEY_LOGIN_ACCOUNTS, {})
     if not isinstance(v, dict):
         return {}
@@ -71,9 +75,43 @@ def _read_login_accounts():
             for k, x in v.items() if not isinstance(x, (dict, list))}
 
 
-def _write_login_accounts(m):
-    """写入 login_accounts（复用 globalconf 文件锁）。成功返回 True。"""
-    return globalconf.set_json(globalconf.KEY_LOGIN_ACCOUNTS, m)
+def _read_login_secret_keys():
+    v = globalconf.get_json(globalconf.KEY_LOGIN_ACCOUNT_SECRETS, [])
+    if not isinstance(v, list):
+        return set()
+    return {str(k) for k in v if isinstance(k, str)}
+
+
+def _read_login_accounts():
+    """读取并解密登录账号 Map（供主应用内部使用，不返回给前端）。"""
+    raw = _read_login_accounts_raw()
+    secrets = _read_login_secret_keys()
+    out = {}
+    for k, v in raw.items():
+        if k in secrets and v:
+            out[k] = secret_store.unprotect(v)
+        else:
+            out[k] = v
+    return out
+
+
+def _read_login_accounts_masked():
+    """读取登录账号 Map，密码类型值用固定星号掩码。"""
+    raw = _read_login_accounts_raw()
+    secrets = _read_login_secret_keys()
+    accounts = {
+        k: (_LOGIN_MASK if k in secrets and v else v)
+        for k, v in raw.items()
+    }
+    return accounts, secrets
+
+
+def _write_login_accounts(m, secrets=None):
+    """写入 login_accounts，可选同时写入密码类型名称（同一把锁）。"""
+    values = {globalconf.KEY_LOGIN_ACCOUNTS: m}
+    if secrets is not None:
+        values[globalconf.KEY_LOGIN_ACCOUNT_SECRETS] = sorted(secrets)
+    return globalconf.set_json_many(values)
 
 
 def _normalize_login_key(key):
@@ -1681,12 +1719,15 @@ def create_app(tray_on_change=None, tray_notify=None):
     # ---------------- 登录账号信息（global_conf.json 的 login_accounts） ----------------
     class LoginEntryBody(BaseModel):
         key: str = ""
-        value: str = ""
+        value: str | None = None
+        secret: bool | None = None
 
     @app.get("/api/login_accounts")
     async def login_accounts_list():
-        """全部登录账号信息（纯扁平 Map，值明文返回，不做掩码）。"""
-        return {"accounts": _read_login_accounts(),
+        """全部登录账号信息；密码类型参数值用固定星号掩码。"""
+        accounts, secrets = _read_login_accounts_masked()
+        return {"accounts": accounts,
+                "secret_keys": sorted(secrets),
                 "global_conf_path": os.path.abspath(
                     globalconf.GLOBAL_CONF_PATH)}
 
@@ -1695,55 +1736,104 @@ def create_app(tray_on_change=None, tray_notify=None):
         key, err = _normalize_login_key(body.key)
         if err:
             return JSONResponse({"error": err}, status_code=400)
-        value, err = _normalize_login_value(body.value)
+        value = "" if body.value is None else str(body.value)
+        value, err = _normalize_login_value(value)
         if err:
             return JSONResponse({"error": err}, status_code=400)
-        m = _read_login_accounts()
+        secret = bool(body.secret)
+        if secret and not value:
+            return JSONResponse({"error": "密码类型参数值不能为空"},
+                                status_code=400)
+        m = _read_login_accounts_raw()
+        secrets = _read_login_secret_keys()
         if key in m:
             return JSONResponse({"error": "参数名称已存在：%s" % key},
                                 status_code=400)
-        m[key] = value
-        if not _write_login_accounts(m):
+        try:
+            m[key] = secret_store.protect(value) if secret else value
+        except secret_store.SecretStoreError as e:
+            return JSONResponse({"error": "密码加密失败：%s" % e},
+                                status_code=500)
+        if secret:
+            secrets.add(key)
+        else:
+            secrets.discard(key)
+        if not _write_login_accounts(m, secrets):
             return JSONResponse({"error": "写入全局配置文件失败"},
                                 status_code=500)
-        log.info("新增登录账号信息: %s", key)
-        return {"ok": True, "key": key}
+        log.info("新增登录账号信息: %s secret=%s", key, secret)
+        return {"ok": True, "key": key, "secret": secret}
 
     @app.put("/api/login_accounts")
     async def login_accounts_update(body: LoginEntryBody,
                                     key: str = Query(...)):
-        m = _read_login_accounts()
+        m = _read_login_accounts_raw()
         if key not in m:
             return JSONResponse({"error": "参数名称不存在"}, status_code=404)
         new_key, err = _normalize_login_key(body.key or key)
         if err:
             return JSONResponse({"error": err}, status_code=400)
-        value, err = _normalize_login_value(body.value)
-        if err:
-            return JSONResponse({"error": err}, status_code=400)
         if new_key != key and new_key in m:
             return JSONResponse({"error": "参数名称已存在：%s" % new_key},
                                 status_code=400)
+        secrets = _read_login_secret_keys()
+        old_secret = key in secrets
+        target_secret = old_secret if body.secret is None else bool(body.secret)
+        value = None if body.value is None else str(body.value)
+        if value is not None:
+            value, err = _normalize_login_value(value)
+            if err:
+                return JSONResponse({"error": err}, status_code=400)
+
+        try:
+            if target_secret:
+                if value:
+                    stored = secret_store.protect(value)
+                elif old_secret:
+                    stored = m[key]       # 留空保持原密文
+                else:
+                    stored = secret_store.protect(m[key])  # 明文转密码类型
+            else:
+                if value is None:
+                    stored = (secret_store.unprotect(m[key])
+                              if old_secret else m[key])
+                elif value == "" and old_secret:
+                    stored = secret_store.unprotect(m[key])  # 留空保持原值
+                else:
+                    stored = value
+        except secret_store.SecretStoreError as e:
+            return JSONResponse({"error": "密码解密/加密失败：%s" % e},
+                                status_code=500)
+
         old_items = list(m.items())
         m.clear()
         for k, v in old_items:
             if k == key:
-                m[new_key] = value
+                m[new_key] = stored
             else:
                 m[k] = v
-        if not _write_login_accounts(m):
+        if target_secret:
+            secrets.add(new_key)
+        else:
+            secrets.discard(new_key)
+        if new_key != key:
+            secrets.discard(key)
+        if not _write_login_accounts(m, secrets):
             return JSONResponse({"error": "写入全局配置文件失败"},
                                 status_code=500)
-        log.info("更新登录账号信息: %s -> %s", key, new_key)
-        return {"ok": True, "key": new_key}
+        log.info("更新登录账号信息: %s -> %s secret=%s",
+                 key, new_key, target_secret)
+        return {"ok": True, "key": new_key, "secret": target_secret}
 
     @app.delete("/api/login_accounts")
     async def login_accounts_delete(key: str = Query(...)):
-        m = _read_login_accounts()
+        m = _read_login_accounts_raw()
         if key not in m:
             return JSONResponse({"error": "参数名称不存在"}, status_code=404)
+        secrets = _read_login_secret_keys()
         del m[key]
-        if not _write_login_accounts(m):
+        secrets.discard(key)
+        if not _write_login_accounts(m, secrets):
             return JSONResponse({"error": "写入全局配置文件失败"},
                                 status_code=500)
         log.info("删除登录账号信息: %s", key)
@@ -1751,14 +1841,21 @@ def create_app(tray_on_change=None, tray_notify=None):
 
     @app.get("/api/login_accounts/params")
     async def login_accounts_params(key: list[str] = Query(default=[])):
-        """按参数名称返回实际值（生成的登录脚本运行时调用）。"""
-        m = _read_login_accounts()
+        """按参数名称返回非密码值；密码类型只允许通过 value_from 使用。"""
+        m = _read_login_accounts_raw()
+        secrets = _read_login_secret_keys()
         wanted = list(dict.fromkeys(key)) if key else list(m)
         missing = [k for k in wanted if k not in m]
         if missing:
             return JSONResponse(
                 {"error": "参数名称不存在：%s" % ", ".join(missing)},
                 status_code=404)
+        secret_wanted = [k for k in wanted if k in secrets]
+        if secret_wanted:
+            return JSONResponse(
+                {"error": "密码类型参数不通过该接口返回，请使用 value_from：%s"
+                          % ", ".join(secret_wanted)},
+                status_code=403)
         values = {k: m[k] for k in wanted}
         log.info("查询登录账号信息: keys=%s", ",".join(wanted))
         return {"ok": True, "params": values}
@@ -1792,7 +1889,12 @@ def create_app(tray_on_change=None, tray_notify=None):
         login_accounts 解析，不返回给调用方，也不记录。
         """
         actions = [a.model_dump(exclude_none=True) for a in body.actions]
-        accounts = _read_login_accounts()
+        try:
+            accounts = _read_login_accounts()
+        except secret_store.SecretStoreError as e:
+            return JSONResponse(
+                {"ok": False, "error": "密码字段解密失败：%s" % e},
+                status_code=500)
         try:
             browser_actions_mod.validate_actions(actions, accounts)
             return await asyncio.to_thread(
