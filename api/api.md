@@ -83,16 +83,18 @@ GET /api/cookies/query?url=<URL或域名>[&profile=<Chrome实例编号>]
 > Authorization 的来源：Chrome 插件观察浏览器实际请求头中的 Authorization
 > （范围内主机），与 Cookie 同一推送链路、同一接收页面展示。
 
-## 2. 获取用于抓包的 Chrome 的 Cookie、Authorization（实时）
+## 2. 获取 CDP 实例的 Cookie、Authorization（实时）
 
-由 AI 分析并生成脚本时，有可能需要获得 Cookie 发起实际 HTTP/HTTPS 请求以进行验证；抓包文件中的 Cookie、Authorization 值均掩码，无法从抓包数据获取。以下接口经 CDP 实时读取**用于抓包的 Chrome** 内存中的 Cookie（含 httpOnly 与分区 Cookie），仅在内存中传递，不长期保存到文件。
+由 AI 分析并生成脚本时，有可能需要获得 Cookie 发起实际 HTTP/HTTPS 请求以进行验证；抓包文件中的 Cookie、Authorization 值均掩码，无法从抓包数据获取。以下接口经 CDP 实时读取**指定 CDP Chrome 实例**内存中的 Cookie（含 httpOnly 与分区 Cookie），仅在内存中传递，不长期保存到文件。
 
 ```
 GET /api/cookies/cdp?url=<URL或域名>[&port=<CDP端口>]
 ```
 
 - `url`：必填，与 `/api/cookies/query` 同口径——完整 URL 或域名/IP；Cookie 按其主机名做域名匹配（`domain` 带前置点匹配主域及所有子域，host-only 精确匹配），Authorization 按其主机名精确匹配
-- `port`：可选，默认取配置的 CDP 调试端口（用于抓包的 Chrome 实例）；仅影响 Cookie 读取，Authorization 观察来自配置实例的抓包事件流
+- `port`：可选，默认取配置的 CDP 调试端口（用于抓包的 Chrome 实例，默认 9222）。正式接口只允许抓包端口或已登记的 CDP 实例端口（见 `docs/自动登录脚本/多账号多CDP实例方案.md`），未登记端口返回 400
+- **Authorization 只对抓包实例（默认 9222）返回**：非 9222 的登录实例不抓包、不安装插件，没有 Authorization 观察缓存，响应中 `authorizations` 为空数组、`authorization` 为空串；依赖 Authorization 的网站暂不适用多实例方案
+- 多账号场景：`?port=9223` 与 `?port=9224` 分别读取各账号实例的 Cookie，互不影响
 
 **Authorization 的获取机制（观察缓存）**：Authorization 是站点 JS/Service Worker 发请求时设置的请求头，不存在于 Cookie 存储，只能观察实际请求。抓包期间服务观察请求头中的 Authorization，按主机缓存于内存（与插件观察 Authorization 同口径）。因此需要**先开始抓包再操作页面**，停止抓包后缓存仍在内存中，脚本仍可查询；服务重启后清空。
 
@@ -124,18 +126,19 @@ GET /api/cookies/cdp?url=<URL或域名>[&port=<CDP端口>]
 ### 失败响应（404，返回明确错误）
 
 - 与 `/api/cookies/query` 兼容口径：Cookie 与 Authorization **均**无命中才返回 404，任一命中即 200（纯 Authorization 命中时 `cookies` 为空数组，`cookie_error` 说明 Cookie 侧原因）
-- 用于抓包的 Chrome 未启动 / CDP 端口不可达（且无 Authorization 命中）：`CDP 读取失败（抓包 Chrome 未启动或调试端口 xx 不可达）: <底层错误>`
-- 主机无任何匹配：`没有与主机 xx 匹配的 Cookie（抓包 Chrome 中可能未登录该站点）`
+- 端口未登记（不是抓包端口且不在 `cdp_chrome_profiles` 中）：400，`CDP 端口 xx 未登记...`
+- CDP 实例未启动 / 调试端口不可达（且无 Authorization 命中）：`CDP 读取失败（CDP Chrome 未启动或调试端口 xx 不可达）: <底层错误>`
+- 主机无任何匹配：`没有与主机 xx 匹配的 Cookie（CDP Chrome 端口 xx 中可能未登录该站点）`
 - `url` 无法解析主机名：`缺少 url 参数或无法解析主机名`；`url` 完全缺失时由接口框架参数校验直接返回 422（与 `/api/cookies/query` 行为一致）
 
 ### 与 /api/cookies/query 的关系（互补，非替代）
 
 | | /api/cookies/query | /api/cookies/cdp |
 |---|---|---|
-| Cookie 来源 | 插件推送的快照（日常 Chrome） | 抓包 Chrome 实时内存（Storage.getCookies） |
+| Cookie 来源 | 插件推送的快照（日常 Chrome） | 指定 CDP 实例实时内存（Storage.getCookies） |
 | Cookie 时效 | 定时推送间隔 + 整体覆盖 | 实时（登录后立即可查） |
 | Cookie 能力边界 | 受插件清单与 chrome.cookies API 限制（分区 Cookie 不可见） | httpOnly、CHIPS 分区 Cookie 都可读 |
-| Authorization | 插件观察日常 Chrome 的请求头 | 抓包期间观察抓包 Chrome 的请求头 |
+| Authorization | 插件观察日常 Chrome 的请求头 | 抓包期间观察抓包 Chrome 的请求头（仅 9222 抓包实例；登录实例为空） |
 
 日常 Chrome 未开 CDP 调试端口时依旧只能使用 `/api/cookies/query`（插件链路）。
 
@@ -153,8 +156,9 @@ GET /api/cookies/cdp?url=<URL或域名>[&port=<CDP端口>]
 1. **执行环境**：脚本由本项目的 Python 虚拟环境执行（`.venv`），
    运行方式为 `python -u 脚本路径`，**不传递任何参数**。
 2. **依赖**：优先使用 `requests`（已随工具安装在虚拟环境中）；
-   如脚本需要操作抓包 Chrome 页面，使用 `/api/browser/actions`
-   （见 `api/browser-actions.md`），**不需要** `import playwright`。
+   如脚本需要操作 CDP 实例页面，使用 `/api/browser/actions`（请求体带
+   `port`，默认 9222；见 `api/browser-actions.md`），**不需要**
+   `import playwright`。
    如需其他虚拟环境中不存在的第三方库，提醒人工将其加入
    `chrome_capture_operate_python/requirements.txt` 并重新运行
    `install.bat` 安装。

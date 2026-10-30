@@ -11,6 +11,8 @@ import threading
 import time
 from urllib.parse import urlsplit
 
+from . import chrome_proc
+
 log = logging.getLogger("app.browser")
 
 MAX_ACTIONS = 100
@@ -25,8 +27,15 @@ ALLOWED_ACTIONS = {
 _LOAD_STATES = {"load", "domcontentloaded", "networkidle"}
 _SELECTOR_STATES = {"attached", "detached", "visible", "hidden"}
 
-# 同一时间只允许一个登录脚本操作抓包 Chrome，避免多个请求互相切换标签页
-_BROWSER_LOCK = threading.Lock()
+# 浏览器动作锁按 CDP 端口：同一实例串行（避免多个请求互相切换标签页），
+# 不同实例可并发登录（多账号多 CDP 实例方案 14.6）。
+_BROWSER_LOCKS = {}
+_BROWSER_LOCKS_GUARD = threading.Lock()
+
+
+def _lock_for(cdp_port):
+    with _BROWSER_LOCKS_GUARD:
+        return _BROWSER_LOCKS.setdefault(int(cdp_port), threading.Lock())
 
 
 class BrowserActionError(Exception):
@@ -203,6 +212,10 @@ def run_actions(cdp_port, url, expected_host, actions, timeout_ms, accounts):
             "url 主机 %s 与 expected_host %s 不一致"
             % (target.hostname, expected_host))
     validate_actions(actions, accounts)
+    if not chrome_proc.is_cdp_alive(cdp_port, force=True):
+        raise BrowserActionError(
+            "CDP 端口 %d 的 Chrome 未启动或不可达（请先启动该实例，"
+            "或调用 /api/cdp-profiles/ensure）" % cdp_port)
     if not isinstance(timeout_ms, int) or timeout_ms <= 0:
         timeout_ms = DEFAULT_TOTAL_TIMEOUT_MS
     timeout_ms = min(timeout_ms, 300000)
@@ -217,7 +230,7 @@ def run_actions(cdp_port, url, expected_host, actions, timeout_ms, accounts):
             "主应用缺少 Playwright（请运行 install.bat）：%s" % e,
             status_code=500)
 
-    with _BROWSER_LOCK:
+    with _lock_for(cdp_port):
         try:
             with sync_playwright() as p:
                 browser = p.chromium.connect_over_cdp(

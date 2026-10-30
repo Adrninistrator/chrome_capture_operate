@@ -1,3 +1,30 @@
+# 20261030
+
+- 定时任务“每隔一段时间执行”支持指定星期x：新增任务/编辑时勾选周一~周日（可多选，不选=每天），并提供“全选”一键勾选/取消全部星期x；星期限制与“允许执行的时间段”同时生效；任务列表描述显示指定星期
+- interval 调度点计算改为按天推进并用整数微秒求 `start+k*间隔` 边界，支持星期限制下跨天查找，避免 1 秒级间隔逐点遍历；`next_run/latest_due` 在星期与时间段范围内取最近点
+- 参数配置页新增“全局配置文件”：展示完整路径（点击全选）、复制路径、下载 JSON 备份；新增 `GET /api/global_conf/file`（文件不存在返回 404），`GET /api/config` 返回 `global_conf_path`/`global_conf_exists`
+- 统一启动入口为 `app.main`：start.bat 与 PyCharm 都运行同一模块，start.bat 只负责选择解释器；启动成功（`/health` 就绪）、失败、已在运行时在桌面右下角弹出自动关闭的提示（成功显示访问地址，失败提示查看 log 目录），`msgbox` 不再阻塞；`.venv` 缺失时 start.bat 用系统 Python 运行 `app.main --venv-check`，由同一模块弹出安装提示；端口已监听时用 `/health` 区分本程序（已在运行）与其他程序（端口占用）
+
+# 20261029
+
+- 新增企业微信消息通道（移植自 wecom-aibot/send_recv_wecom_msg）：后台 WSS 长连接订阅鉴权、心跳保活、断线重连，按消息序号接收用户回复；脚本执行到需要短信验证码/动态 Token/一次性口令时，可经企业微信通知用户并取回回复
+- 参数配置页新增“企业微信消息”：BotID、长连接密钥、会话 ID、会话类型、消息保存时长、长连接地址；保存到全局配置 `wecom_config`，密钥使用 Windows DPAPI 加密（不回显、留空保持），保存后自动重启长连接；展示配置/连接状态与最近错误，支持清除配置
+- 新增 HTTP 接口：`POST /api/wecom/send_message`（消息内容 + 4 位消息序号）、`GET /api/wecom/get_reply?seq=...`（只指定消息序号）、`GET /api/wecom/status`、`GET/PUT/DELETE /api/wecom/config`；回复按序号归属，序号/内容校验，发送失败回滚序号
+- d. 自动登录脚本提示词页面增加“企业微信接收短信验证码/动态 Token”说明与文档路径；默认提示词不包含该功能，由用户按需补充要求
+- 文档：新增 `api/wecom-message.md`（该功能只在本文档说明）；更新 README、参数配置需求（prompt-Python项目.md）
+- 优化 d. 自动登录脚本提示词页面：页面支持上下滚动（底部复制按钮可达）；多账号同时登录说明、企业微信说明改为独立弹框（低频功能不占页面空间）；新增映射后自动滚动并聚焦新行，提示词立即以占位文本反映未填写的映射；提示词主体改为可编辑（带 markdown 高亮），用户直接在 `# 要求填写` 节补充要求（不再单独提供补充要求框），重新生成时保留已填内容；输出明确要求生成 `login.py`、`README.md`、`prompt.md`（本次使用的完整提示词）；提示词模板恢复 `# 参考文档` 节，引用 `api/auto-login-guide.md`、`api/browser-actions.md`、`api/api.md`，请求体/动作字段/输出文件等细节移入 api 文档，模板只保留任务参数、接口 URL、`# 要求填写` 与输出目录
+
+# 20261028
+
+- 新增多账号多 CDP 实例：全局配置 `cdp_chrome_profiles`（端口为唯一标识，独立调试端口与数据目录）；9222 默认抓包实例自动登记、禁止删除/改端口并继续使用旧目录；9223–9999 登录实例由自动登录脚本按需创建，使用空 profile 与 `<base>_<port>` 目录
+- 新增 CDP 实例接口：`GET/POST /api/cdp-profiles`、`PUT/DELETE /api/cdp-profiles/{port}`、`POST /api/cdp-profiles/{port}/open|bring-to-front`、`POST /api/cdp-profiles/ensure`；ensure 按端口幂等创建/启动，端口被其他程序或未登记 Chrome 占用时报错且不抢占；删除只移除登记、保留 profile，同端口再次 ensure 接管旧目录
+- 新增 `start_cdp_chrome(port, profile_dir)` 与 CDP 就绪等待；`/api/chrome/start` 保留为 9222 兼容入口
+- `/api/browser/actions` 新增 `port`（`cdp_profile_id` 为兼容别名），只允许抓包端口或已登记端口；浏览器动作锁由全局改为按端口，同一实例串行、不同实例可并发
+- `/api/cookies/cdp` 只允许抓包端口或已登记端口；非 9222 实例只返回 Cookie，不提供 Authorization（不抓包、不装插件）
+- 新增“CDP实例”标签页：端口、名称、用途、CDP 状态、数据目录、是否自动创建，支持新增/改名/打开/置顶/删除；自动创建的实例可见
+- d 标签页增加多账号同时登录说明（可要求 AI 或人工修改 `CDP_PORT`/`ACCOUNT_NAME`）；自动登录提示词携带 CDP 端口、ensure 与 Cookie 接口、浏览器动作 `port`
+- 示例 `login.py` 支持显式 `CDP_PORT`/`ACCOUNT_NAME` 与 ensure；文档更新 README、api/auto-login-guide.md、api/browser-actions.md、api/api.md、docs/自动登录脚本/README.md
+
 # 20261024
 
 - 自动登录账号支持“密码类型”：管理页面可勾选密码类型，值使用 Windows DPAPI 用户级加密保存，页面/GET 接口固定显示 `********`，编辑留空保持原值，取消密码类型时解密；`value_from` 在主应用内解密使用，`/api/login_accounts/params` 不返回密码类型参数；账号值与密码类型名称同锁原子写入

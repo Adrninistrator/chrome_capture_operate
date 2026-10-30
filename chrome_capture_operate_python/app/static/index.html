@@ -75,9 +75,6 @@ pre { margin: 0; font-family: Consolas, monospace; font-size: 12px; white-space:
 .md-edit pre { position: absolute; inset: 0; padding: 10px; overflow: hidden; pointer-events: none; }
 .md-edit textarea { position: absolute; inset: 0; padding: 10px; border: none; background: transparent; color: transparent; caret-color: #333; resize: none; outline: none; white-space: pre-wrap; word-break: break-all; }
 .md-edit pre, .md-edit textarea { line-height: 1.6; }
-/* 只读提示词：灰色背景 + 默认光标，明确不可编辑 */
-.readonly-prompt { flex: 1; min-height: 0; overflow: auto; border: 1px solid #d9dee5; border-radius: 4px; background: #f2f4f7; padding: 10px; cursor: default; }
-.readonly-prompt pre { white-space: pre-wrap; word-break: break-all; }
 .md-edit pre .md-h { font-size: 12px; }
 .md-edit pre .md-code { padding: 0; }
 pre .rl { color: #0b5cad; font-weight: 700; }
@@ -181,6 +178,7 @@ button.btn.chrome-top:disabled { background: #ccd3da; color: #f4f6f8; cursor: de
   <button data-tab="mcp" title="切换到MCP服务说明页面">MCP服务说明</button>
   <button data-tab="cookies" title="切换到Chrome Cookie接收与查询记录页面">Chrome Cookie接收与查询记录</button>
   <button data-tab="multi" title="切换到Chrome进程多开页面">Chrome进程多开</button>
+  <button data-tab="cdp" title="切换到CDP Chrome实例页面：多账号自动登录使用的独立调试端口实例">CDP实例</button>
   <button data-tab="usage" title="切换到使用说明页面">使用说明</button>
 </nav>
 
@@ -358,6 +356,56 @@ button.btn.chrome-top:disabled { background: #ccd3da; color: #f4f6f8; cursor: de
     </table>
     <div style="margin-top:10px"><button class="btn" onclick="saveConf()" title="保存参数到conf/conf.json（端口修改需重启Python脚本生效）">保存</button><span id="confMsg" class="muted"></span></div>
   </div>
+
+  <div class="card">
+    <b>企业微信消息</b> <span class="muted">（脚本获取短信验证码、动态 Token 等；保存到全局配置文件）</span>
+    <div class="muted" style="margin-top:6px">配置企业微信智能机器人（API 模式 → 长连接）后，脚本执行到需要人工提供验证码/Token 时，可发消息通知用户并读取回复。企业微信要求用户先给机器人发过一条消息，机器人才能主动推送；同一机器人只能保持一个长连接。</div>
+    <table style="margin-top:10px; width:100%">
+      <tr><th style="width:200px">机器人 BotID</th><td>
+        <input type="text" id="wecomBotId" style="width:420px" placeholder="企业微信后台获取的机器人 ID" title="企业微信智能机器人的 BotID">
+      </td></tr>
+      <tr><th>长连接密钥</th><td>
+        <input type="password" id="wecomSecret" autocomplete="new-password" style="width:420px" placeholder="请输入长连接 Secret" title="企业微信智能机器人的长连接专用密钥；使用 Windows DPAPI 用户级加密保存，已设置时留空保持原值、不回显">
+        <span id="wecomSecretState" class="muted"></span>
+        <div class="muted">使用 Windows DPAPI 用户级加密保存；换 Windows 用户或机器后需要重新填写。</div>
+      </td></tr>
+      <tr><th>会话 ID</th><td>
+        <input type="text" id="wecomChatId" style="width:420px" placeholder="单聊填用户 userid，群聊填群 chatid" title="接收消息的会话 ID：单聊填用户 userid，群聊填群 chatid">
+      </td></tr>
+      <tr><th>会话类型</th><td>
+        <select id="wecomChatType" style="width:140px" title="会话类型：单聊（userid）或群聊（chatid）">
+          <option value="1">单聊</option>
+          <option value="2">群聊</option>
+        </select>
+      </td></tr>
+      <tr><th>消息保存时长(秒)</th><td>
+        <input type="number" id="wecomTtl" style="width:110px" value="300" title="消息序号与回复在内存中的保存时长，默认 300 秒（5 分钟）">
+        <span class="muted">默认 300（5 分钟）；超时后序号与回复清理，可重新使用</span>
+      </td></tr>
+      <tr><th>长连接地址</th><td>
+        <input type="text" id="wecomWsUrl" style="width:420px" placeholder="留空使用官方 wss://openws.work.weixin.qq.com" title="企业微信长连接地址，留空使用官方地址；本地联调时可改为 mock 服务端">
+        <span class="muted">留空使用官方地址</span>
+      </td></tr>
+    </table>
+    <div style="margin-top:10px">
+      <button class="btn" id="btnWecomSave" title="校验并保存企业微信参数到全局配置文件，同时重启长连接">保存</button>
+      <button class="btn warn" id="btnWecomClear" title="清除企业微信配置并停止长连接（不影响其他参数）">清除配置</button>
+      <span id="wecomMsg" class="muted"></span>
+    </div>
+    <div id="wecomStatus" class="muted" style="margin-top:8px"></div>
+  </div>
+
+  <div class="card">
+    <b>全局配置文件</b> <span class="muted">（登录账号、企业微信、脚本目录、定时任务、自启动等）</span>
+    <div class="row" style="margin-top:10px;flex-wrap:wrap;gap:8px;align-items:center">
+      <input type="text" id="globalConfPath" readonly style="flex:1;min-width:420px;font-family:Consolas,monospace"
+             onclick="this.select()" title="全局配置文件完整路径，点击全选或使用复制按钮">
+      <button class="btn" id="btnCopyGlobalConfPath" title="复制全局配置文件完整路径">复制路径</button>
+      <button class="btn" id="btnDownloadGlobalConf" title="下载全局配置文件 JSON（包含 DPAPI 密文等敏感信息，请妥善保管）">下载</button>
+      <span id="globalConfState" class="muted"></span>
+    </div>
+    <div class="muted" style="margin-top:6px">全局配置文件包含登录账号密码（DPAPI 密文）、企业微信长连接密钥（DPAPI 密文）等敏感信息；请勿放入 Git/云同步目录。</div>
+  </div>
 </div>
 
 <!-- ============ MCP 工具说明 ============ -->
@@ -434,6 +482,24 @@ button.btn.chrome-top:disabled { background: #ccd3da; color: #f4f6f8; cursor: de
   </div>
 </div>
 
+<!-- ============ CDP Chrome 实例（多账号自动登录） ============ -->
+<div class="tab" id="tab-cdp">
+  <div class="card">
+    <b>CDP Chrome实例</b>
+    <div class="muted">用于自动登录、浏览器动作与CDP实时Cookie的独立Chrome实例，每个实例使用独立的调试端口与数据目录。9222为默认抓包实例（自动登记、不可删除）；大于9222的实例仅用于自动登录，不抓包、不安装插件、不提供Authorization。自动登录脚本按端口按需创建并启动实例，无需手工新增。</div>
+    <div class="row" style="margin-top:10px">
+      <button class="btn" id="btnCdpAdd" title="新增一个CDP Chrome实例：输入名称、调试端口（9223–9999）与数据目录（可选）">新增</button>
+      <span class="muted">端口创建后不可修改；删除只移除登记，保留数据目录与登录态</span>
+    </div>
+  </div>
+  <div class="card">
+    <table id="cdpTable">
+      <thead><tr><th>端口</th><th>名称</th><th>用途</th><th>CDP状态</th><th>数据目录</th><th>自动创建</th><th>创建时间</th><th>操作</th></tr></thead>
+      <tbody id="cdpBody"><tr><td colspan="8" class="muted">暂无实例</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
 <!-- ============ 使用说明 ============ -->
 <div class="tab" id="tab-usage">
   <div class="card usage-split">
@@ -452,7 +518,7 @@ button.btn.chrome-top:disabled { background: #ccd3da; color: #f4f6f8; cursor: de
 <!-- 登录账号信息管理：数据保存在全局配置文件（叠加在 AI自主操作Chrome 弹窗之上） -->
 <div id="overlay3">
   <div id="popup3">
-    <header><h1 id="popTitle3">登录账号信息管理</h1><button class="btn warn" onclick="closePop3()" title="关闭管理窗口">关闭</button></header>
+    <header><h1 id="popTitle3">登录账号信息管理</h1><button class="btn warn" onclick="closePop3()" title="关闭当前弹窗">关闭</button></header>
     <div class="body" id="popBody3"></div>
   </div>
 </div>
@@ -471,6 +537,8 @@ let execDone = null, multiRun = null, execPrefix = '';
 // d. 自动登录脚本提示词：扁平账号信息、本次页面的“页面输入字段描述 -> 参数名称”映射
 let loginAccounts = {}, loginSecretKeys = new Set(), loginConfPath = '', loginMappings = [];
 let loginPromptTemplate = '', loginBrowserApi = '', loginChromeStartApi = '', loginPromptReady = false;
+let loginCdpEnsureApi = '', loginCookiesCdpApi = '', loginCdpPort = 9222;
+let loginAccountName = '抓包实例', loginWecomDocPath = '';
 /* 执行/执行多次按钮的启用状态：选中脚本即可执行；执行多次期间
    （multiRun）与任何一次执行进行中（execTimer）不允许再开始多次执行 */
 function updateRunButtons() {
@@ -701,7 +769,7 @@ function pollExtTask(once) {
 }
 
 // 页头"AI自主操作Chrome"：弹窗五个 TAB（a. 依赖环境准备 + b. AI Agent MCP配置 +
-// c. 页面操作脚本提示词 + d. 自动登录脚本提示词（登录网址 + 参数映射 + 只读提示词）
+// c. 页面操作脚本提示词 + d. 自动登录脚本提示词（登录网址 + 参数映射 + 可编辑提示词）
 // 需求：打开页面时提示词模板自动复制到剪贴板，另有复制按钮；
 // a 中提供启动/检测用于抓包的Chrome（与抓包页同款按钮与状态）；
 // b 分两种情况（上下用框包围）：使用Claude Code（输入项目目录一键写入
@@ -719,6 +787,12 @@ $('#btnAiOps').onclick = async () => {
   loginPromptTemplate = (lp && lp.prompt) || '';
   loginBrowserApi = (lp && lp.browser_api) || '';
   loginChromeStartApi = (lp && lp.chrome_start_api) || '';
+  loginCdpEnsureApi = (lp && lp.cdp_ensure_api) || '';
+  loginCookiesCdpApi = (lp && lp.cookies_cdp_api) || '';
+  loginCdpPort = (lp && lp.cdp_port) || 9222;
+  loginAccountName = (lp && lp.account_name) || '抓包实例';
+  loginWecomDocPath = (r && r.wecom_doc_path)
+    || (lp && lp.wecom_doc_path) || '（未获取到文档路径）';
   loginMappings = [];                                 // 仅当前页面会话有效，不持久化
   const loginUrlValue = (lu && lu.value) || '';
   const cdp = st.cdp_port || 9222, port = st.port || 33445;
@@ -772,7 +846,7 @@ $('#btnAiOps').onclick = async () => {
     '<div class="row" style="padding:4px 0"><button class="btn" id="popCopy2" title="复制编辑框中的全部内容到剪贴板">复制</button></div>' +
     '</div>' +
     // d. 自动登录脚本提示词（只读；按上方登录网址与参数映射自动生成）
-    '<div class="tab-panel" id="panel-ailogin" style="display:none;flex-direction:column;flex:1;min-height:0">' +
+    '<div class="tab-panel" id="panel-ailogin" style="display:none;overflow-y:auto;flex:1;min-height:0">' +
     '<div class="row" style="margin:4px 0 8px;flex-wrap:wrap;gap:8px;align-items:center">' +
     '<b>登录网址</b>' +
     '<input type="text" id="loginUrlInput" style="flex:1;min-width:320px" placeholder="https://example.com/login" title="登录页完整地址（http/https）；保存到全局配置文件，提示词中自动使用">' +
@@ -781,15 +855,17 @@ $('#btnAiOps').onclick = async () => {
     '<b>登录账号等参数映射</b>' +
     '<span class="muted">（页面输入字段描述 = 网页输入框说明，如 用户名、密码；参数名称 = 全局配置文件中的参数名称）</span>' +
     '<button class="btn" id="btnLoginAccountManage" title="打开登录账号信息管理页面（数据保存在全局配置文件）">登录账号管理</button>' +
-    '<button class="btn" id="btnLoginMappingAdd" title="新增一条 页面输入字段描述 -> 参数名称 映射">新增映射</button></div>' +
-    '<div style="max-height:180px;overflow:auto;margin:0 0 6px">' +
+    '<button class="btn" id="btnLoginMappingAdd" title="新增一条 页面输入字段描述 -> 参数名称 映射">新增映射</button>' +
+    '<button class="btn ghost" id="btnMultiAccountHelp" title="查看同一网站多账号同时登录的说明（低频率功能，单独弹框展示）">多账号同时登录说明</button>' +
+    '<button class="btn ghost" id="btnWecomHelp" title="查看通过企业微信接收短信验证码/动态Token的说明（低频率功能，单独弹框展示）">企业微信说明</button></div>' +
+    '<div id="loginMappingsWrap" style="max-height:180px;overflow:auto;margin:0 0 6px">' +
     '<table id="loginMappingsTable"><thead><tr><th>页面输入字段描述</th><th>参数名称</th><th style="width:70px">操作</th></tr></thead><tbody></tbody></table>' +
     '<div class="muted" id="loginMappingsEmpty" style="display:none;padding:6px">（暂无映射，点击“新增映射”添加）</div></div>' +
-    '<div style="margin:0 0 4px"><b>提示词</b><span class="muted">（只读，根据登录网址与参数映射自动生成）</span></div>' +
+    '<div style="margin:8px 0 4px"><b>提示词</b><span class="muted">（可编辑；根据登录网址与参数映射自动生成，可在“# 要求填写”处直接补充要求）</span></div>' +
     '<div id="loginPromptErr" style="margin:0 0 6px;color:#b3392e;font-weight:700;display:none"></div>' +
     '<div id="loginPromptWarn" style="margin:0 0 6px;color:#b3392e;font-weight:700;display:none"></div>' +
-    '<div class="readonly-prompt"><pre id="loginPromptView"></pre></div>' +
-    '<div class="row" style="padding:4px 0"><button class="btn" id="popCopy3" title="复制只读提示词到剪贴板">复制</button></div>' +
+    '<div class="md-edit" style="flex:none;height:45vh;min-height:240px"><pre id="mdHl3"></pre><textarea id="loginPromptEdit" spellcheck="false"></textarea></div>' +
+    '<div class="row" style="padding:4px 0"><button class="btn" id="popCopy3" title="复制编辑框中的提示词到剪贴板">复制</button></div>' +
     '</div></div>';
   // TAB 切换（c/d 提示词面板为 flex 列布局，其余为 block）
   let loginPromptCopied = false;
@@ -799,11 +875,10 @@ $('#btnAiOps').onclick = async () => {
         b.classList.toggle('active', b === btn));
       document.querySelectorAll('#popBody .tab-panel').forEach(pn =>
         pn.style.display = pn.id === 'panel-' + btn.dataset.tab
-          ? ((pn.id === 'panel-aip' || pn.id === 'panel-ailogin')
-              ? 'flex' : 'block') : 'none');
-      // d 标签页：首次打开时自动复制只读提示词（模板不可用时不复制）
+          ? (pn.id === 'panel-aip' ? 'flex' : 'block') : 'none');
+      // d 标签页：首次打开时自动复制当前提示词（模板不可用时不复制）
       if (btn.dataset.tab === 'ailogin') {
-        const text = renderLoginPrompt();
+        const text = ($('#loginPromptEdit').value || '');
         if (!loginPromptCopied && text && loginPromptReady) {
           copyText(text, true);
           loginPromptCopied = true;
@@ -813,6 +888,7 @@ $('#btnAiOps').onclick = async () => {
   });
   // 可编辑模板 + markdown 高亮（与 showText 同口径）
   const ta = $('#popEdit2'), hl = $('#mdHl2');
+  // d 提示词同样为可编辑 + 高亮（用户直接在“# 要求填写”处补充）
   const render = () => { hl.innerHTML = highlightMarkdown(ta.value) + '\n'; };
   ta.value = r.prompt;
   render();
@@ -821,21 +897,28 @@ $('#btnAiOps').onclick = async () => {
   ta.onscroll = () => { hl.scrollTop = ta.scrollTop; hl.scrollLeft = ta.scrollLeft; };
   $('#popCopy2').onclick = () => copyText(ta.value);
 
-  // TAB d：登录网址 + 人工映射（页面输入字段描述 -> 参数名称）+ 只读提示词
+  // TAB d：登录网址 + 人工映射（页面输入字段描述 -> 参数名称）+ 可编辑提示词
   $('#loginUrlInput').value = loginUrlValue;
   $('#btnLoginAccountManage').onclick = openLoginAccountManager;
+  $('#btnMultiAccountHelp').onclick = openMultiAccountHelp;
+  $('#btnWecomHelp').onclick = openWecomHelp;
   $('#btnLoginMappingAdd').onclick = () => {
     const keys = Object.keys(loginAccounts);
     loginMappings.push({desc: '', key: keys[0] || ''});
     renderLoginMappings();
     renderLoginPrompt();
+    // 新行落在映射区滚动范围下方时自动滚到底并聚焦，避免“点了没反应”
+    const wrap = document.getElementById('loginMappingsWrap');
+    if (wrap) wrap.scrollTop = wrap.scrollHeight;
+    const inputs = document.querySelectorAll('#loginMappingsTable tbody input');
+    if (inputs.length) inputs[inputs.length - 1].focus();
   };
   $('#popCopy3').onclick = () => {
-    const text = renderLoginPrompt();
     if (!loginPromptReady) {
       toastMsg('请先填写登录网址和参数映射', 'err');
       return;
     }
+    const text = ($('#loginPromptEdit').value || '');
     if (text) copyText(text);
   };
   // 登录网址：失焦/回车保存到全局配置，并刷新提示词
@@ -852,6 +935,15 @@ $('#btnAiOps').onclick = async () => {
     $('#loginUrlMsg').textContent = '已保存';
     $('#loginUrlMsg').style.color = '#187a3c';
     renderLoginPrompt();
+  };
+  // d 提示词编辑框：用户可直接修改（含“# 要求填写”节），输入时同步高亮
+  const promptEdit = $('#loginPromptEdit'), promptHl = $('#mdHl3');
+  promptEdit.oninput = () => {
+    promptHl.innerHTML = highlightMarkdown(promptEdit.value) + '\n';
+  };
+  promptEdit.onscroll = () => {
+    promptHl.scrollTop = promptEdit.scrollTop;
+    promptHl.scrollLeft = promptEdit.scrollLeft;
   };
   $('#loginUrlInput').oninput = renderLoginPrompt;   // 输入时提示词即时同步
   $('#loginUrlInput').onchange = saveLoginUrl;
@@ -984,6 +1076,7 @@ document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   if (b.dataset.tab === 'mcp') loadMcpTools();
   if (b.dataset.tab === 'cookies') loadReceives();
   if (b.dataset.tab === 'multi') loadMultiProfiles();
+  if (b.dataset.tab === 'cdp') loadCdpProfiles();
   if (b.dataset.tab === 'usage') loadUsage();
 });
 
@@ -1049,6 +1142,144 @@ $('#btnMpAdd').onclick = () => {
     closePop();
     toastMsg('已创建实例 编号' + r.profile.id, 'ok');
     loadMultiProfiles();
+  };
+  $('#overlay').style.display = 'block';
+};
+
+/* ---------- CDP Chrome 实例（多账号自动登录） ----------
+   与"Chrome进程多开"独立：每个实例独立调试端口与数据目录，用于自动登录 /
+   浏览器动作 / CDP 实时 Cookie；9222 为默认抓包实例（受保护），
+   9223–9999 为登录实例（不抓包、不装插件、不提供 Authorization）。 */
+let cdpProfiles = [];
+
+async function loadCdpProfiles() {
+  const r = await api('/api/cdp-profiles');
+  if (r.error) { toastMsg(r.error, 'err', 5000); return; }
+  cdpProfiles = r.profiles || [];
+  renderCdpProfiles();
+}
+
+function renderCdpProfiles() {
+  const body = $('#cdpBody');
+  if (!body) return;
+  if (!cdpProfiles.length) {
+    body.innerHTML = '<tr><td colspan="8" class="muted">暂无实例</td></tr>';
+    return;
+  }
+  body.innerHTML = cdpProfiles.map(p => {
+    const isCap = p.role === 'capture';
+    return `<tr><td>${p.port}</td><td>${esc(p.name)}</td>` +
+      `<td>${isCap ? '抓包实例' : '登录实例'}</td>` +
+      `<td><span class="badge ${p.alive ? 'ok' : 'bad'}" data-cdp-state="${p.port}">${p.alive ? '已启动' : '未启动'}</span></td>` +
+      `<td style="max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:Consolas,monospace" title="${escAttr(p.profile_dir)}">${esc(p.profile_dir)}</td>` +
+      `<td>${p.auto_created ? '是' : '否'}</td>` +
+      `<td>${esc(p.created || '')}</td>` +
+      `<td><button class="btn" onclick="openCdpProfile(${p.port})" title="启动该实例的Chrome并等待CDP就绪${isCap ? '（会先拷贝收藏夹/历史/用户名）' : '（使用空数据目录）'}">打开</button> ` +
+      `<button class="btn" onclick="frontCdpProfile(${p.port})" title="将该实例的Chrome窗口还原并置顶显示">置顶</button> ` +
+      `<button class="btn" onclick="renameCdpProfile(${p.port})" title="修改实例名称（端口不可修改）">改名</button> ` +
+      (isCap ? '' : `<button class="btn warn" onclick="delCdpProfile(${p.port})" title="删除该实例登记（保留数据目录与登录态，同一端口再次 ensure 时接管）">删除</button>`) +
+      `</td></tr>`;
+  }).join('');
+}
+
+function renderCdpState(list) {
+  if (!Array.isArray(list)) return;
+  const cachedPorts = cdpProfiles.map(p => p.port).join(',');
+  const nowPorts = list.map(p => p.port).join(',');
+  const tab = document.getElementById('tab-cdp');
+  if (cachedPorts && cachedPorts !== nowPorts && tab && tab.classList.contains('active')) {
+    loadCdpProfiles();       // 脚本按需新建的实例：列表自动刷新
+    return;
+  }
+  list.forEach(p => {
+    const el = document.querySelector(`[data-cdp-state="${p.port}"]`);
+    if (el) {
+      el.textContent = p.alive ? '已启动' : '未启动';
+      el.className = 'badge ' + (p.alive ? 'ok' : 'bad');
+    }
+    const cached = cdpProfiles.find(x => x.port === p.port);
+    if (cached) cached.alive = p.alive;
+  });
+}
+
+async function openCdpProfile(port) {
+  const r = await api(`/api/cdp-profiles/${port}/open`, { method: 'POST' });
+  toastMsg(r.message || r.error || (r.ok ? '已启动' : '启动失败'),
+           r.ok ? 'ok' : 'err', 6000);
+  loadCdpProfiles();
+}
+
+async function frontCdpProfile(port) {
+  const r = await api(`/api/cdp-profiles/${port}/bring-to-front`,
+                      { method: 'POST' });
+  toastMsg(r.message || r.error || (r.ok ? '已置顶' : '置顶失败'),
+           r.ok ? 'ok' : 'err', 6000);
+}
+
+async function delCdpProfile(port) {
+  const b = document.querySelector(`#cdpBody button[onclick*="delCdpProfile(${port})"]`);
+  if (b && !b.dataset.armed) { armConfirm(b, '再次点击确认删除', 4); return; }
+  if (b) disarmConfirm(b);
+  const r = await api(`/api/cdp-profiles/${port}`, { method: 'DELETE' });
+  if (r.ok) toastMsg('已删除登记（数据目录与登录态已保留）', 'ok', 6000);
+  else toastMsg(r.error || '删除失败', 'err');
+  loadCdpProfiles();
+}
+
+async function renameCdpProfile(port) {
+  const p = cdpProfiles.find(x => x.port === port);
+  $('#popTitle').textContent = '修改CDP实例名称';
+  $('#popBody').innerHTML =
+    '<div style="max-width:520px;font-size:13px;line-height:1.9">' +
+    '<div class="muted">端口 ' + port + ' 创建后不可修改；名称仅用于显示与提示词。</div>' +
+    '<div style="margin-top:10px"><b>名称</b></div>' +
+    '<input type="text" id="cdpName" style="width:100%;padding:5px 6px;border:1px solid #ccc;border-radius:4px;box-sizing:border-box">' +
+    '<div style="margin-top:14px"><button class="btn" id="cdpRenameSubmit" title="保存该实例的新名称（端口不变）">保存</button></div>' +
+    '</div>';
+  $('#cdpName').value = (p && p.name) || '';
+  $('#cdpRenameSubmit').onclick = async () => {
+    const name = $('#cdpName').value.trim();
+    if (!name) { toastMsg('名称不能为空', 'err'); return; }
+    const r = await api(`/api/cdp-profiles/${port}`, { method: 'PUT',
+      body: JSON.stringify({ name }) });
+    if (r.error) { toastMsg(r.error, 'err', 5000); return; }
+    closePop();
+    toastMsg('名称已保存', 'ok');
+    loadCdpProfiles();
+  };
+  $('#overlay').style.display = 'block';
+}
+
+$('#btnCdpAdd').onclick = () => {
+  $('#popTitle').textContent = '新增CDP Chrome实例';
+  $('#popBody').innerHTML =
+    '<div style="max-width:560px;font-size:13px;line-height:1.9">' +
+    '<div class="muted">用于同一网站多个账号分别长期登录。每个实例独立调试端口与数据目录，仅用于自动登录，不抓包、不安装插件。也可以不手工新增，由自动登录脚本按端口自动创建。</div>' +
+    '<div style="margin-top:10px"><b>名称</b>（用于区分，如"账号A"）</div>' +
+    '<input type="text" id="cdpAddName" placeholder="如：账号A" style="width:100%;padding:5px 6px;border:1px solid #ccc;border-radius:4px;box-sizing:border-box">' +
+    '<div style="margin-top:10px"><b>调试端口</b>（9223–9999，创建后不可修改）</div>' +
+    '<input type="number" id="cdpAddPort" min="9223" max="9999" placeholder="如：9223" title="CDP调试端口，必须大于9222且在9223–9999之间，且未被其他程序占用" style="width:100%;padding:5px 6px;border:1px solid #ccc;border-radius:4px;box-sizing:border-box">' +
+    '<div style="margin-top:10px"><b>数据目录</b>（可选，留空默认使用独立目录）</div>' +
+    '<input type="text" id="cdpAddDir" placeholder="留空则默认：<抓包数据目录>_<端口>" title="该实例的Chrome数据存储目录完整路径；留空自动使用默认目录。实例使用空目录，不复制日常Chrome数据。" style="width:100%;padding:5px 6px;border:1px solid #ccc;border-radius:4px;box-sizing:border-box;font-family:Consolas,monospace">' +
+    '<div class="muted">实例使用空数据目录，不复制日常Chrome的收藏夹/历史/Cookie；由自动登录脚本重新登录。</div>' +
+    '<div style="margin-top:14px"><button class="btn" id="cdpAddSubmit" title="创建该CDP实例（不会立即启动）">创建</button></div>' +
+    '</div>';
+  $('#cdpAddSubmit').onclick = async () => {
+    const name = $('#cdpAddName').value.trim();
+    const port = +$('#cdpAddPort').value;
+    const dir = $('#cdpAddDir').value.trim();
+    if (!name) { toastMsg('名称不能为空', 'err'); return; }
+    if (!Number.isInteger(port) || port < 9223 || port > 9999) {
+      toastMsg('调试端口必须是 9223–9999 的整数', 'err'); return;
+    }
+    const payload = { name, port };
+    if (dir) payload.profile_dir = dir;
+    const r = await api('/api/cdp-profiles', { method: 'POST',
+      body: JSON.stringify(payload) });
+    if (r.error) { toastMsg(r.error, 'err', 5000); return; }
+    closePop();
+    toastMsg('已创建CDP实例（端口 ' + port + '）', 'ok');
+    loadCdpProfiles();
   };
   $('#overlay').style.display = 'block';
 };
@@ -1289,6 +1520,41 @@ function loginKeyOptions(selected) {
   return html;
 }
 
+/* 多账号同时登录说明：低频功能，单独弹框展示（不占用 d 页面纵向空间） */
+function openMultiAccountHelp() {
+  $('#popTitle3').textContent = '多账号同时登录说明';
+  $('#popBody3').innerHTML =
+    '<div style="font-size:13px;line-height:1.9">' +
+    '<div>默认生成的登录脚本使用 CDP 9222（抓包实例）。如果需要对同一网站的其他账号同时登录：</div>' +
+    '<ul style="margin:8px 0 0 18px;padding:0">' +
+    '<li>在“CDP实例”标签页查看各账号实例的端口（由脚本按需自动创建）；</li>' +
+    '<li>可以要求 AI 将生成的 login.py 中的 CDP_PORT 改为目标端口；</li>' +
+    '<li>或人工修改 login.py 中的 CDP_PORT 与 ACCOUNT_NAME；</li>' +
+    '<li>确保该端口的 CDP Chrome 已启动（脚本会调用 ensure 自动创建并启动）；</li>' +
+    '<li>不同账号使用不同的账号参数名称（如 acct1_user/acct1_pwd、acct2_user/acct2_pwd）。</li>' +
+    '</ul>' +
+    '<div class="muted" style="margin-top:10px">完整方案见 docs/自动登录脚本/多账号多CDP实例方案.md</div>' +
+    '</div>';
+  $('#overlay3').style.display = 'block';
+}
+
+/* 企业微信说明：低频功能，单独弹框展示（不占用 d 页面纵向空间） */
+function openWecomHelp() {
+  $('#popTitle3').textContent = '企业微信接收短信验证码 / 动态 Token';
+  $('#popBody3').innerHTML =
+    '<div style="font-size:13px;line-height:1.9">' +
+    '<div>脚本执行到需要人工提供短信验证码、动态 Token、一次性口令时，可经企业微信通知用户并取回回复。需先在“参数配置 → 企业微信消息”填写机器人参数，并让用户先给机器人发过一条消息。</div>' +
+    '<ul style="margin:8px 0 0 18px;padding:0">' +
+    '<li>发送消息（消息内容 + 4位消息序号）：<code>POST /api/wecom/send_message</code></li>' +
+    '<li>获取回复（只指定消息序号）：<code>GET /api/wecom/get_reply?seq=...</code></li>' +
+    '<li>接口文档：<code>' + esc(loginWecomDocPath) + '</code></li>' +
+    '<li>如需在生成的 login.py 中使用，请在 d 页面提示词的“# 要求填写”节填写以上要求；默认提示词不包含该功能。</li>' +
+    '</ul>' +
+    '<div class="muted" style="margin-top:10px">该功能不属于高频操作，单独弹框展示，不占用 d 页面空间。</div>' +
+    '</div>';
+  $('#overlay3').style.display = 'block';
+}
+
 function renderLoginMappings() {
   const tbody = document.querySelector('#loginMappingsTable tbody');
   if (!tbody) return;
@@ -1327,12 +1593,18 @@ function renderLoginMappings() {
 }
 
 function renderLoginPrompt() {
-  const view = document.getElementById('loginPromptView');
+  const view = document.getElementById('loginPromptEdit');
   if (!view || !loginPromptTemplate) return '';
+  // 保留用户已在“# 要求填写”中填写的内容（重新生成时不覆盖）
+  const current = view.value || '';
+  const filled = current.match(
+    /# 要求填写\s*\r?\n([\s\S]*?)(?=\r?\n# 输出|$)/);
+  const pastExtra = filled ? filled[1].trim() : '';
   const urlInput = document.getElementById('loginUrlInput');
   const url = ((urlInput && urlInput.value) || '').trim();
-  const mappings = loginMappings.filter(
-    m => (m.desc || '').trim() || (m.key || '').trim());
+  // 展示与校验都使用全部映射（含刚新增、尚未填写的行），
+// 新行会立即反映在提示词中（以占位文本显示），避免“新增后没反应”
+  const mappings = loginMappings;
   const missing = [];
   if (!url) missing.push('登录网址');
   if (!mappings.length) missing.push('至少一条参数映射');
@@ -1368,7 +1640,18 @@ function renderLoginPrompt() {
     loginChromeStartApi || '（未配置接口）');
   text = text.split('__BROWSER_ACTIONS_URL__').join(
     loginBrowserApi || '（未配置接口）');
-  view.innerHTML = highlightMarkdown(text) + '\n';
+  text = text.split('__CDP_ENSURE_URL__').join(
+    loginCdpEnsureApi || '（未配置接口）');
+  text = text.split('__COOKIES_CDP_URL__').join(
+    loginCookiesCdpApi || '（未配置接口）');
+  text = text.split('__CDP_PORT__').join(String(loginCdpPort));
+  text = text.split('__ACCOUNT_NAME__').join(loginAccountName);
+  // “# 要求填写”节：保留用户已填写内容；为空时给出提示
+  text = text.split('__EXTRA_REQUIREMENTS__').join(
+    pastExtra || '（请补充生成脚本的具体要求，如特殊登录步骤、验证码处理、重试要求等；不需要可删除本节）');
+  view.value = text;
+  const hl = document.getElementById('mdHl3');
+  if (hl) hl.innerHTML = highlightMarkdown(text) + '\n';
   return text;
 }
 
@@ -1568,6 +1851,8 @@ function renderState(st) {
     : st.state === 'paused' ? `已暂停：${st.session}（记录保留，可继续）`
     : (st.message || '');
   renderNoiseBanner(st);
+  // CDP 实例列表状态（脚本按需新建的实例也随轮询出现）
+  renderCdpState(st.cdp_profiles);
 }
 
 /* ---------- 高频重复（轮询/心跳类）请求提示（噪音治理） ----------
@@ -2599,6 +2884,11 @@ async function showSchedForm(task) {
     '从 <input type="datetime-local" id="sfStart" step="1" title="开始执行的具体时间" style="padding:3px 5px;border:1px solid #ccc;border-radius:4px"> 开始，每隔 ' +
     '<input type="number" id="sfEvery" min="1" value="1" style="width:70px" title="间隔数量"> ' +
     '<select id="sfUnit" title="间隔时间单位"><option value="1">秒</option><option value="60" selected>分钟</option><option value="3600">小时</option><option value="86400">天</option></select> 执行一次' +
+    '<div style="margin-top:8px"><b>执行星期</b> <span class="muted">（不选=每天；可指定星期x）</span>' +
+    '<label class="ck" style="margin-left:12px"><input type="checkbox" id="sfIvWdAll" title="一键勾选/取消全部星期x"> 全选</label></div>' +
+    '<div class="wd-box" id="sfIntervalWdBox" style="margin-top:4px">' +
+    WD_NAMES.map((n, i) => `<label class="ck"><input type="checkbox" class="sfIvWd" value="${i}" title="勾选每周${n}执行（仅每隔一段时间执行时生效；不选=每天）"> ${n}</label>`).join('') +
+    '</div>' +
     '<div style="margin-top:8px"><label class="ck" style="margin:0"><input type="checkbox" id="sfAllTime" checked> 允许执行的时间段：全部时间段</label></div>' +
     '<div id="sfWindowsBox" style="display:none;margin-top:4px">' +
     '<div id="sfWindows"></div>' +
@@ -2660,6 +2950,20 @@ async function showSchedForm(task) {
     $('#sfWeeklyBox').style.display = mode === 'weekly' ? '' : 'none';
     $('#sfMonthlyBox').style.display = mode === 'monthly' ? '' : 'none';
   };
+  // interval 执行星期：一键全选/取消全部，并同步“全选”状态
+  const ivWdBoxes = () => [...document.querySelectorAll('.sfIvWd')];
+  const syncIvWdAll = () => {
+    const boxes = ivWdBoxes();
+    const checked = boxes.filter(b => b.checked).length;
+    const all = $('#sfIvWdAll');
+    all.checked = boxes.length > 0 && checked === boxes.length;
+    all.indeterminate = checked > 0 && checked < boxes.length;
+  };
+  $('#sfIvWdAll').onchange = e => {
+    ivWdBoxes().forEach(b => { b.checked = e.target.checked; });
+    syncIvWdAll();
+  };
+  ivWdBoxes().forEach(b => b.onchange = syncIvWdAll);
   document.querySelectorAll('input[name=sfType]').forEach(i => i.onchange = syncType);
   document.querySelectorAll('input[name=sfMode]').forEach(i => i.onchange = syncMode);
   $('#sfCancel').onclick = closePop;
@@ -2685,6 +2989,11 @@ async function showSchedForm(task) {
       const unit = [86400, 3600, 60, 1].find(u => iv % u === 0 && iv / u >= 1) || 1;
       $('#sfUnit').value = String(unit);
       $('#sfEvery').value = String(Math.max(1, Math.round(iv / unit)));
+      // 指定星期x回填（未配置/空 = 每天）
+      (sch.weekdays || []).forEach(d => {
+        const c = document.querySelector(`.sfIvWd[value="${d}"]`);
+        if (c) c.checked = true;
+      });
       // 允许执行的时间段回填（未配置 = 全部）
       const wins = sch.time_windows || [];
       $('#sfAllTime').checked = !wins.length;
@@ -2700,6 +3009,7 @@ async function showSchedForm(task) {
   syncType();
   syncMode();
   syncWindows();
+  syncIvWdAll();
 
   $('#sfSave').onclick = async () => {
     const script_path = $('#sfPy').value;
@@ -2728,6 +3038,10 @@ async function showSchedForm(task) {
       schedule = {type: 'interval',
                   start_at: start.replace('T', ' ') + (start.length === 16 ? ':00' : ''),
                   interval_sec: every * (+$('#sfUnit').value)};
+      // 指定星期x：不勾选 = 每天（不写该字段，保持旧行为）
+      const ivWd = [...document.querySelectorAll('.sfIvWd:checked')]
+        .map(i => +i.value);
+      if (ivWd.length) schedule.weekdays = ivWd;
       // 允许执行的时间段：勾选"全部时间段"则不限制；否则收集非空起止行
       if (!$('#sfAllTime').checked) {
         const time_windows = [];
@@ -2854,7 +3168,12 @@ async function loadConf() {
   $('#cfgCt').value = (c.content_type_filter || []).join('\n');
   $('#cfgTypeFilter').value = (c.type_filter || []).join('\n');
   $('#cfgCdp').value = c.cdp_port; $('#cfgTimeout').value = c.exec_timeout_sec;
+  // 全局配置文件路径/是否存在
+  $('#globalConfPath').value = c.global_conf_path || '';
+  $('#globalConfState').textContent = c.global_conf_exists
+    ? '' : '（尚未创建）';
   renderOpTypes(c.op_event_types || []);
+  await loadWecomConf();
 }
 async function saveConf() {
   const opTypes = Array.from(document.querySelectorAll('#cfgOpTypes input[data-optype]'))
@@ -2869,6 +3188,111 @@ async function saveConf() {
   if (r.error) { toast($('#confMsg'), '保存失败：' + r.error, true); return; }
   toast($('#confMsg'), r.ok ? '已保存。' + (r.note || '') : '保存失败', !r.ok);
 }
+
+/* 全局配置文件：复制路径 / 下载 JSON 备份 */
+$('#btnCopyGlobalConfPath').onclick = () => {
+  const v = $('#globalConfPath').value;
+  if (v) copyText(v);
+};
+$('#btnDownloadGlobalConf').onclick = async () => {
+  try {
+    const r = await fetch('/api/global_conf/file');
+    if (!r.ok) {
+      let msg = '下载失败（HTTP ' + r.status + '）';
+      try {
+        const d = await r.json();
+        if (d.error) msg = '下载失败：' + d.error;
+      } catch (e) { /* 非 JSON 响应 */ }
+      toastMsg(msg, 'err', 5000);
+      return;
+    }
+    const blob = await r.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'global_conf.json';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    toastMsg('已下载全局配置文件', 'ok');
+  } catch (e) {
+    toastMsg('下载失败：' + e, 'err', 5000);
+  }
+};
+
+/* ---------- 企业微信消息配置（全局配置 wecom_config） ---------- */
+function renderWecomStatus(s) {
+  const el = $('#wecomStatus');
+  if (!el) return;
+  if (!s) { el.textContent = ''; return; }
+  if (!s.configured) {
+    el.textContent = s.last_error
+      ? '未启动：' + s.last_error
+      : '未配置：脚本无法使用企业微信消息功能';
+    el.style.color = s.last_error ? '#b3392e' : '#888';
+    return;
+  }
+  const bits = ['已配置', s.connected ? '长连接已连接' : '长连接未连接',
+                s.chat_type === 2 ? '群聊' : '单聊'];
+  if (s.active_count) bits.push('待回复消息 ' + s.active_count + ' 条');
+  if (s.last_error) bits.push('最近错误：' + s.last_error);
+  el.textContent = bits.join(' · ');
+  el.style.color = (!s.connected || s.last_error) ? '#b3392e' : '#187a3c';
+}
+
+async function loadWecomConf() {
+  const r = await api('/api/wecom/config');
+  if (r.error) { renderWecomStatus(null); return; }
+  const c = r.config || {};
+  $('#wecomBotId').value = c.bot_id || '';
+  $('#wecomChatId').value = c.chat_id || '';
+  $('#wecomChatType').value = String(c.chat_type || 1);
+  $('#wecomTtl').value = c.reply_ttl || 300;
+  $('#wecomWsUrl').value = c.ws_url || '';
+  $('#wecomSecret').value = '';
+  $('#wecomSecret').placeholder = c.secret_set
+    ? '已设置，留空保持原值' : '请输入长连接 Secret';
+  $('#wecomSecretState').textContent = c.secret_set
+    ? '已设置（DPAPI 加密保存，不回显）' : '未设置';
+  renderWecomStatus(r.status);
+}
+
+async function saveWecomConf() {
+  const payload = {
+    bot_id: $('#wecomBotId').value.trim(),
+    secret: $('#wecomSecret').value,
+    chat_id: $('#wecomChatId').value.trim(),
+    chat_type: +$('#wecomChatType').value,
+    reply_ttl: +$('#wecomTtl').value,
+    ws_url: $('#wecomWsUrl').value.trim(),
+  };
+  const r = await api('/api/wecom/config',
+                      {method: 'PUT', body: JSON.stringify(payload)});
+  if (r.error || !r.ok) {
+    toast($('#wecomMsg'), '保存失败：' + (r.error || '未知错误'), true);
+    return;
+  }
+  toast($('#wecomMsg'), '已保存，长连接将在后台连接', false);
+  $('#wecomSecret').value = '';
+  await loadWecomConf();
+  // 长连接在后台建立，稍后刷新一次状态（不阻塞保存）
+  setTimeout(loadWecomConf, 1500);
+  setTimeout(loadWecomConf, 4000);
+}
+
+$('#btnWecomSave').onclick = saveWecomConf;
+$('#btnWecomClear').onclick = async (e) => {
+  const b = e.currentTarget;
+  if (!b.dataset.armed) { armConfirm(b, '再次点击确认清除', 4); return; }
+  disarmConfirm(b);
+  const r = await api('/api/wecom/config', {method: 'DELETE'});
+  if (r.error || !r.ok) {
+    toast($('#wecomMsg'), '清除失败：' + (r.error || '未知错误'), true);
+    return;
+  }
+  toast($('#wecomMsg'), '已清除企业微信配置', false);
+  await loadWecomConf();
+};
 
 /* ---------- MCP 工具说明 ---------- */
 async function loadMcpTools() {

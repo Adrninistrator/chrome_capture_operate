@@ -612,8 +612,9 @@ def create_mcp_server(config, capture, store, executor):
     async def query_cookies_cdp(
         url: str = Field(..., description="目标URL或域名/IP（必填）"),
         port: int = Field(
-            None, description="CDP调试端口：空则使用配置端口（默认9222），"
-                              "仅影响Cookie读取"),
+            None, description="CDP调试端口：空则使用配置端口（默认9222）；"
+                              "可指定已登记的登录实例端口（9223–9999）。"
+                              "非抓包实例只返回 Cookie，不返回 Authorization"),
     ) -> dict:
         """与 HTTP /api/cookies/cdp 同口径（api/api.md 第 2 节）。
 
@@ -625,12 +626,16 @@ def create_mcp_server(config, capture, store, executor):
         from . import cookie_cdp
         from app.cookie_query_log import log_cookie_query
         from app.cookie_store import CookieStore
-        cdp_port = port or config.get("cdp_port")
+        capture_port = int(config.get("cdp_port") or 9222)
+        cdp_port = int(port or capture_port)
         host = cookie_cdp.parse_host(url)
         if not host:
             return {"ok": False, "error": "缺少 url 参数或无法解析主机名"}
         cookies, cookie_err = await cookie_cdp.query_cdp(url, cdp_port)
-        auth_entry = cookie_cdp.auth_cache.get(host)
+        # 非抓包实例只返回 Cookie：它们不抓包、不装插件，没有 Authorization
+        # 观察缓存（多账号多 CDP 实例方案 5.7/14.3）
+        auth_entry = (cookie_cdp.auth_cache.get(host)
+                      if cdp_port == capture_port else None)
         # 404 兼容口径：cookie 与 Authorization 均无命中才报错，任一
         # 命中即成功（纯 Authorization 命中时 cookies 为空、cookie_error
         # 透出 Cookie 侧原因）

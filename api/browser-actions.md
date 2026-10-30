@@ -4,9 +4,14 @@
 脚本**调用。自动登录脚本生成流程、MCP 使用、登录态判断接口选择、两阶段
 登录流程等见 `api/auto-login-guide.md`。
 
-生成脚本**不直接使用 Playwright/CDP**，只通过本接口操作已运行的抓包 Chrome。
-执行动作前应先调用 `POST http://127.0.0.1:33445/api/chrome/start` 确保抓包
-Chrome 已启动（已启动时不会重复启动，`ok=false` 时报错退出）。
+生成脚本**不直接使用 Playwright/CDP**，只通过本接口操作已运行的 CDP Chrome
+实例。执行动作前应先调用 `POST http://127.0.0.1:33445/api/cdp-profiles/ensure`
+（请求 `{"port": 端口, "name": "实例名称"}`）确保目标实例已启动——端口不存在
+时主应用自动创建；`ok=false` 时报错退出。9222 也可使用兼容入口
+`POST /api/chrome/start`。
+
+同一网站多账号同时登录时，每个脚本使用独立端口（9223–9999），请求体通过
+`port` 指定目标实例；不同实例的浏览器动作锁彼此独立，可并发执行。
 
 ## 1. 请求
 
@@ -17,6 +22,7 @@ Content-Type: application/json
 
 ```json
 {
+  "port": 9222,
   "url": "https://example.com/login",
   "expected_host": "example.com",
   "timeout_ms": 60000,
@@ -37,6 +43,8 @@ Content-Type: application/json
 
 | 字段 | 说明 |
 |---|---|
+| `port` | 目标 CDP 实例端口；不传时使用配置的抓包端口（默认 9222）。只允许抓包端口或已登记端口，否则 400 |
+| `cdp_profile_id` | 可选，兼容别名，取值等同端口（本方案实例唯一标识为端口）；与 `port` 同时指定且不一致时 400 |
 | `url` | 目标登录页；主应用按协议 + 主机 + 端口复用已有标签页，没有才新开 |
 | `expected_host` | 必填；主应用校验当前页面主机，防止误填到其他站点 |
 | `timeout_ms` | 整批动作总超时，默认 60000，最大 300000 |
@@ -126,7 +134,9 @@ Content-Type: application/json
 
 - 服务仅监听 `127.0.0.1`；
 - 主应用不记录动作中的 `value`，FastAPI 默认访问日志不记录请求体；
-- 同一时间只允许一个登录脚本操作抓包 Chrome，避免标签页互相干扰；
+- 浏览器动作锁按 CDP 端口：同一实例串行（避免标签页互相干扰），
+  不同实例可并发登录；
+- 目标 CDP 实例未启动时返回 400，应先调用 ensure；
 - 当前只操作主页面，暂不支持 iframe、新标签页切换、文件上传/下载；
 - 若登录流程跳转到其他主机（SSO），当前 `expected_host` 校验会拒绝，
   需要扩展允许的主机列表。
@@ -134,5 +144,5 @@ Content-Type: application/json
 ## 6. 相关文档
 
 - `api/auto-login-guide.md`：自动登录脚本生成要求、MCP 使用、登录态判断、
-  两阶段流程、安全要求；
+  两阶段流程、多账号多 CDP 实例、安全要求；
 - `api/api.md`：通用脚本的 Cookie/Authorization 获取与编写约定。

@@ -3,9 +3,10 @@
 任务两种触发方式（prompt 需求"定时执行脚本"节）：
 - at（在指定时间执行）：每天 / 每个星期x / 每个月第x天 + 多个 时:分:秒
 - interval（每隔一段时间执行）：从指定时间开始，每隔 N 秒执行一次；
-  可指定允许执行的时间段——全部时间段（默认）或多个 起止 时:分:秒 时间段
-  （调度点落在任一时间段内才执行，区间按自然日 00:00~24:00 理解，
-  start<=end 为当天区间，start>end 视为跨零点区间）
+  可指定星期x（可多选，不选=每天）与允许执行的时间段——全部时间段（默认）
+  或多个 起止 时:分:秒 时间段（调度点落在任一允许星期且任一时间段内才
+  执行；区间按自然日 00:00~24:00 理解，start<=end 为当天区间，
+  start>end 视为跨零点区间）
 
 任务保存在全局配置文件（global_conf.json key=schedules）；新增后默认启动；
 暂停/恢复/删除/编辑只操作任务本身，不删除对应的 Python 脚本。
@@ -106,6 +107,11 @@ def validate_schedule(sch):
             return "间隔时间必须为正整数秒"
         if iv <= 0:
             return "间隔时间必须为正整数秒"
+        wd = sch.get("weekdays")
+        if wd is not None:
+            if not isinstance(wd, list) or any(
+                    not isinstance(d, int) or d < 0 or d > 6 for d in wd):
+                return "指定星期x执行的格式非法（0=周一 … 6=周日）"
         err = _validate_windows(sch)
         if err:
             return err
@@ -142,26 +148,140 @@ def _parse_windows(sch):
     return out
 
 
-def _in_windows(dt, windows):
-    """时刻是否落在允许时间段内（start<=end 当天区间；start>end 跨零点）。"""
-    if windows is None:
-        return True
-    t = dt.time()
-    for s, e in windows:
-        if s <= e:
-            if s <= t <= e:
-                return True
-        else:  # 跨零点区间（如 22:00~06:00）
-            if t >= s or t <= e:
-                return True
-    return False
-
-
 def _parse_time(t):
     try:
         return datetime.strptime(t, "%H:%M:%S").time()
     except (TypeError, ValueError):
         return None
+
+
+# ---------- interval 调度点计算（支持指定星期x + 允许时间段） ----------
+# 调度点固定在 start_at + k*interval_sec；星期限制与时间段只决定该点是否
+# 执行，不改变点序列本身。实现按“天”推进并用整数微秒计算，避免小间隔
+# （如 1 秒）逐点遍历造成的大量循环。
+
+def _interval_params(sch):
+    """interval 配置 -> (start, interval_sec)；非法返回 (None, 0)。"""
+    start = _parse(sch.get("start_at"))
+    try:
+        iv = int(sch.get("interval_sec"))
+    except (TypeError, ValueError):
+        iv = 0
+    if start is None or iv <= 0:
+        return None, 0
+    return start, iv
+
+
+def _interval_weekdays(sch):
+    """指定星期x（0=周一）集合；未配置/空表示每天。"""
+    wd = sch.get("weekdays")
+    if not wd:
+        return None
+    return {d for d in wd if isinstance(d, int) and 0 <= d <= 6}
+
+
+def _day_windows(day, windows):
+    """某一天允许执行的时间区间列表 [(start_dt, end_dt)]（含端点）。
+
+    windows 为 None 表示全天；跨零点区间按“当天 00:00~end”与
+    “start~次日 00:00”两段展开（按时刻判断，窗口每天重复）。
+    """
+    midnight = datetime.combine(day, datetime.min.time())
+    # 次日 00:00 属于下一天（星期限制按点所在日期判断），当天区间用它
+    # 的前一微秒作为闭区间上界
+    day_end = midnight + timedelta(days=1) - timedelta(microseconds=1)
+    if windows is None:
+        return [(midnight, day_end)]
+    spans = []
+    for s, e in windows:
+        a = datetime.combine(day, s)
+        b = datetime.combine(day, e)
+        if s <= e:
+            spans.append((a, b))
+        else:
+            spans.append((midnight, b))
+            spans.append((a, day_end))
+    spans.sort()
+    merged = []
+    for a, b in spans:
+        if merged and a <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], b))
+        else:
+            merged.append((a, b))
+    return merged
+
+
+def _point_at_or_after(start, iv, t):
+    """调度点序列中 >= t 的第一个点。"""
+    if t <= start:
+        return start
+    delta_us = (t - start) // timedelta(microseconds=1)
+    iv_us = iv * 1000000
+    k = (delta_us + iv_us - 1) // iv_us
+    return start + timedelta(seconds=k * iv)
+
+
+def _point_at_or_before(start, iv, t):
+    """调度点序列中 <= t 的最后一个点；t < start 返回 None。"""
+    if t < start:
+        return None
+    delta_us = (t - start) // timedelta(microseconds=1)
+    k = delta_us // (iv * 1000000)
+    return start + timedelta(seconds=k * iv)
+
+
+def _lookahead_days(iv):
+    """按天推进的最大天数：星期限制 7 天一轮；超大间隔按间隔天数放宽。"""
+    if iv < 86400:
+        return 370
+    return min(3700, iv // 86400 + 8)
+
+
+def _next_interval_point(sch, now):
+    """interval 的下一个调度点（> now）；受星期x与允许时间段限制。"""
+    start, iv = _interval_params(sch)
+    if start is None:
+        return None
+    first = _point_at_or_after(
+        start, iv, now + timedelta(microseconds=1))
+    weekdays = _interval_weekdays(sch)
+    windows = _parse_windows(sch)
+    day = first.date()
+    for offset in range(_lookahead_days(iv)):
+        d = day + timedelta(days=offset)
+        if weekdays is not None and d.weekday() not in weekdays:
+            continue
+        for a, b in _day_windows(d, windows):
+            t = max(a, first) if d == first.date() else a
+            p = _point_at_or_after(start, iv, t)
+            if p <= b:
+                return p
+    return None
+
+
+def _latest_interval_point(sch, now):
+    """interval 的最近一个调度点（<= now）；受星期x与允许时间段限制。"""
+    start, iv = _interval_params(sch)
+    if start is None or now < start:
+        return None
+    last = _point_at_or_before(start, iv, now)
+    if last is None:
+        return None
+    weekdays = _interval_weekdays(sch)
+    windows = _parse_windows(sch)
+    day = last.date()
+    for offset in range(_lookahead_days(iv)):
+        d = day - timedelta(days=offset)
+        if d < start.date():
+            break
+        if weekdays is not None and d.weekday() not in weekdays:
+            continue
+        for a, b in reversed(_day_windows(d, windows)):
+            t = min(b, last) if d == last.date() else b
+            p = _point_at_or_before(start, iv, t)
+            if p is not None and p >= a:
+                return p
+    return None
 
 
 def _day_matches(d, sch):
@@ -179,26 +299,7 @@ def next_run(task, now):
         return None
     sch = task.get("schedule") or {}
     if sch.get("type") == "interval":
-        start = _parse(sch.get("start_at"))
-        try:
-            iv = int(sch.get("interval_sec", 0))
-        except (TypeError, ValueError):
-            return None
-        if start is None or iv <= 0:
-            return None
-        windows = _parse_windows(sch)
-        if start > now:
-            cand = start
-        else:
-            k = int((now - start).total_seconds() // iv) + 1
-            cand = start + timedelta(seconds=k * iv)
-        # 有时间段限制时向后找第一个落在时间段内的调度点（上限找 1000 个，
-        # 覆盖最坏情况：间隔远小于每日窗口长度，如 1s 间隔 + 每天 1 秒窗口）
-        for _ in range(1000):
-            if _in_windows(cand, windows):
-                return cand
-            cand += timedelta(seconds=iv)
-        return None
+        return _next_interval_point(sch, now)
     times = sorted(sch.get("times") or [])
     if not times:
         return None
@@ -226,27 +327,7 @@ def latest_due(task, now):
     """
     sch = task.get("schedule") or {}
     if sch.get("type") == "interval":
-        start = _parse(sch.get("start_at"))
-        try:
-            iv = int(sch.get("interval_sec", 0))
-        except (TypeError, ValueError):
-            return None
-        if start is None or iv <= 0 or now < start:
-            return None
-        k = int((now - start).total_seconds() // iv)
-        cand = start + timedelta(seconds=k * iv)
-        windows = _parse_windows(sch)
-        if windows is None:
-            return cand
-        # 向前找（含当前点）最近一个在时间段内的调度点；跨零点窗口下
-        # 调度点必然密集（iv 小于窗口跨度才会被配置出来），向前 1000 个足够
-        for _ in range(1000):
-            if _in_windows(cand, windows):
-                return cand
-            cand -= timedelta(seconds=iv)
-            if cand < start:
-                return None
-        return None
+        return _latest_interval_point(sch, now)
     times = sorted(sch.get("times") or [], reverse=True)
     if not times:
         return None
@@ -273,12 +354,19 @@ def describe_schedule(sch):
         start = sch.get("start_at", "")
         desc = "从 %s 起，每隔 %s 执行一次" % (
             start, _fmt_interval(sch.get("interval_sec")))
+        parts = []
+        weekdays = _interval_weekdays(sch)
+        if weekdays:
+            parts.append("仅 " + "、".join(
+                WEEKDAY_NAMES[d] for d in sorted(weekdays)))
         windows = sch.get("time_windows")
         if windows:
-            desc += "（仅 %s）" % "、".join(
-                "%s~%s" % (w.get("start"), w.get("end")) for w in windows)
-        else:
-            desc += "（全部时间段）"
+            parts.append("时间段 " + "、".join(
+                "%s~%s" % (w.get("start"), w.get("end")) for w in windows))
+        elif not weekdays:
+            parts.append("全部时间段")
+        if parts:
+            desc += "（%s）" % "；".join(parts)
         return desc
     mode = sch.get("mode")
     times = "、".join(sch.get("times") or [])

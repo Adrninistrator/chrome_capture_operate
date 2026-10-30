@@ -24,6 +24,10 @@ KEY_SCRIPTS_DIR = "python_scripts_dir_path"
 KEY_AUTO_START = "auto_start"  # 是否开机自启动（"true"/"false"，config 读写）
 KEY_SCHEDULES = "schedules"   # 定时执行任务（结构化，Scheduler 读写）
 KEY_MULTI_PROFILE = "chrome_multi_profile"  # Chrome 多开实例（结构化，webapp 读写）
+KEY_CDP_PROFILES = "cdp_chrome_profiles"  # CDP Chrome 多实例（结构化，cdp_profiles 读写）：
+# [{name, port, profile_dir, auto_created, created}, ...]
+# 端口为实例唯一标识；默认抓包实例（9222）自动登记、禁止删除/改端口；
+# 9223–9999 由自动登录脚本按端口 ensure 创建，只用于登录（不抓包/不装插件）。
 KEY_FAVORITE_PAGES = "favorite_pages"  # 收藏的页面记录（结构化，webapp 读写）
 KEY_TRAY_SCRIPTS = "tray_scripts"  # 系统托盘快速执行脚本列表（结构化，webapp 读写）
 KEY_LOGIN_ACCOUNTS = "login_accounts"  # 自动登录账号信息（纯扁平 Map，webapp 读写）：
@@ -35,6 +39,10 @@ KEY_LOGIN_ACCOUNTS = "login_accounts"  # 自动登录账号信息（纯扁平 Ma
 KEY_LOGIN_ACCOUNT_SECRETS = "login_account_secret_keys"  # 密码类型参数的名称列表
 # 与 KEY_LOGIN_ACCOUNTS 同锁原子写入；密码类型值在返回/展示时掩码
 KEY_LOGIN_URL = "login_url"  # 自动登录脚本使用的登录网址（d 标签页文本框输入）
+KEY_WECOM_CONFIG = "wecom_config"  # 企业微信机器人配置（结构化，wecom 读写）：
+# {bot_id, secret, chat_id, chat_type, reply_ttl, ws_url}
+# secret 为 Windows DPAPI 密文；用于脚本执行时通过企业微信向用户索取
+# 短信验证码、动态 Token 等一次性信息（参数配置页维护）。
 KEY_EXTENSION_ID = "extension_id"  # 解压版 Chrome 插件 ID（插件设置页
 # 连接插件用；ID 与加载路径相关，人工从 chrome://extensions 复制配置一次；
 # 注册表安装版 ID 由服务自动识别，无需配置）

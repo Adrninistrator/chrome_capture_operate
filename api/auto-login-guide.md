@@ -1,48 +1,71 @@
 # 自动登录脚本实现要求（auto-login-guide.md）
 
-本文档面向**生成自动登录 Python 脚本的 AI（或人）**：脚本用于在**用于抓包的
-Chrome**中判断目标网站是否已登录，未登录时通过主应用提供的 HTTP 接口操作页面
-完成登录。生成的脚本**不直接使用 Playwright/CDP**，只依赖 `requests`；账号值
-也只在主应用中使用，不进入生成脚本。
+本文档面向**生成自动登录 Python 脚本的 AI（或人）**：脚本用于在**目标 CDP
+Chrome 实例**中判断目标网站是否已登录，未登录时通过主应用提供的 HTTP 接口
+操作页面完成登录。生成的脚本**不直接使用 Playwright/CDP**，只依赖
+`requests`；账号值也只在主应用中使用，不进入生成脚本。
 
-服务默认 `http://127.0.0.1:33445`；抓包 Chrome 的调试端口以参数配置页实际值
-为准（默认 9222），由主应用内部连接。
+服务默认 `http://127.0.0.1:33445`。每个脚本显式指定目标 CDP 端口：
+
+- **9222**：默认抓包实例（兼容旧行为）；
+- **9223–9999**：同一网站多账号同时登录时，每个账号使用独立脚本与独立端口
+  （如 9223、9224），由脚本启动时 ensure 按需创建。
+
+非 9222 实例只用于自动登录：不抓包、不安装插件、不提供 Authorization，
+只能读取 CDP Cookie。
 
 ## 1. 环境与依赖
 
 - 脚本在项目虚拟环境中执行（`python -u`），只需 `requests`（标准库以外）；
 - **不要 `import playwright`，不要手写 CDP/WebSocket**；页面操作统一调用
   主应用的 `POST /api/browser/actions`；
-- 脚本启动时先调用 `POST http://127.0.0.1:33445/api/chrome/start` 确保抓包
-  Chrome 已启动；已启动时该接口直接返回未重复启动，`ok=false` 时打印明确
-  错误并退出；
+- 脚本顶部显式指定目标实例（端口创建后不可变）：
+
+  ```python
+  CDP_PORT = 9222        # 默认抓包实例；多账号改用 9223–9999
+  ACCOUNT_NAME = "抓包实例"
+  ```
+
+- 脚本启动时先调用 `POST /api/cdp-profiles/ensure`：
+
+  ```json
+  {"port": 9222, "name": "抓包实例"}
+  ```
+
+  端口不存在时主应用自动创建（空 profile）并启动；已存在时只确保启动；
+  已启动时不会重复启动；`ok=false` 时打印明确错误并退出；
 - 脚本不负责抓包开关；接口不可达时打印明确错误并退出；
 - 脚本开头按项目约定把 stdout/stderr 重配置为 UTF-8（Windows 直接命令行
   运行避免中文乱码），参考 `api/api.md` 第 4 节骨架。
 
-启动抓包 Chrome 的参考实现：
+ensure 的参考实现：
 
 ```python
 def ensure_cdp_chrome():
-    """确保抓包 Chrome 已启动；已启动时主应用不会重复启动。"""
+    """确保目标 CDP 实例已启动；端口不存在时主应用自动创建。"""
+    payload = {"port": CDP_PORT, "name": ACCOUNT_NAME}
     try:
-        r = requests.post(SERVICE + "/api/chrome/start", timeout=30)
+        r = requests.post(SERVICE + "/api/cdp-profiles/ensure",
+                          json=payload, timeout=30)
     except requests.RequestException as e:
-        print("启动抓包 Chrome 接口不可达（服务是否运行？）：%s" % e)
+        print("CDP 实例 ensure 接口不可达（服务是否运行？）：%s" % e)
         return False
     try:
         data = r.json()
     except ValueError:
-        print("启动抓包 Chrome 接口返回非 JSON 内容")
+        print("CDP 实例 ensure 接口返回非 JSON 内容")
         return False
     if not data.get("ok"):
-        print("启动抓包 Chrome 失败：%s" % (data.get("message") or "未知错误"))
+        print("启动 CDP 实例失败：%s"
+              % (data.get("error") or data.get("message") or "未知错误"))
         return False
-    print(data.get("message") or "抓包 Chrome 已就绪")
+    print(data.get("message") or "CDP 实例已就绪")
     return True
 ```
 
 在 `main()` 最开始调用；返回 `False` 时直接退出，不要继续读取 Cookie。
+9222 也可继续使用兼容入口 `POST /api/chrome/start`，但多实例场景统一用
+ensure。
 
 ## 2. 账号参数（全部由主应用解析）
 
@@ -97,12 +120,15 @@ C:\Users\%username%\.chrome_capture_operate\global_conf.json
 
 按以下顺序判断，**已登录则跳过登录并成功退出**：
 
-1. **先确保抓包 Chrome 已启动**：
-   `POST http://127.0.0.1:33445/api/chrome/start`
-   → `{"ok": true/false, "message": "..."}`；`ok=false` 时报错退出。
-2. **只使用抓包 Chrome 的 Cookie 接口**：
-   `GET http://127.0.0.1:33445/api/cookies/cdp?url=<登录网址>`
+1. **先确保目标 CDP 实例已启动**：
+   `POST http://127.0.0.1:33445/api/cdp-profiles/ensure`
+   → `{"ok": true/false, "message": "..."}`；`ok=false` 时报错退出
+   （请求体带脚本中的 `CDP_PORT` 与 `ACCOUNT_NAME`）。
+2. **只使用目标 CDP 实例的 Cookie 接口**：
+   `GET http://127.0.0.1:33445/api/cookies/cdp?url=<登录网址>&port=<CDP_PORT>`
    → `cookie_header` / `authorization`（服务需在运行）。
+   非 9222 实例只返回 Cookie，`authorization` 为空——这类实例不抓包，
+   没有 Authorization 观察缓存。
    **禁止使用 `/api/cookies/query`（日常 Chrome 快照），也禁止“日常 Chrome
    查不到再回退 CDP”**——自动登录判断的是抓包 Chrome 是否已登录；日常
    Chrome 已登录而抓包 Chrome 未登录时，回退会误判为已登录并跳过登录。
@@ -165,17 +191,18 @@ C:\Users\%username%\.chrome_capture_operate\global_conf.json
 接口契约（请求/响应/动作字段）见 `api/browser-actions.md`；本节说明自动登录
 场景的用法。
 
-生成脚本通过以下接口操作抓包 Chrome：
+生成脚本通过以下接口操作目标 CDP 实例：
 
 ```http
 POST http://127.0.0.1:33445/api/browser/actions
 Content-Type: application/json
 ```
 
-请求：
+请求（`port` 必填为脚本中的 `CDP_PORT`；不传时使用配置的抓包端口 9222）：
 
 ```json
 {
+  "port": 9222,
   "url": "https://example.com/login",
   "expected_host": "example.com",
   "timeout_ms": 60000,
@@ -248,7 +275,11 @@ Content-Type: application/json
 - 标签页按 URL 的 **协议 + 主机 + 端口** 复用；没有才新开；
 - 主应用内部使用 Playwright 连接抓包 Chrome，生成脚本不接触 Playwright；
 - 账号值通过 `value_from` 在主应用内解析，不会返回给脚本；
-- 同一时间只允许一个登录脚本操作抓包 Chrome，避免标签页互相干扰。
+- 浏览器动作锁按 CDP 端口：同一实例串行（避免标签页互相干扰），
+  不同实例可并发登录；
+- `port` 只允许抓包端口或已登记的 CDP 实例端口；未登记端口返回 400，
+  避免脚本误连其他 Chrome；
+- CDP 实例未启动时返回 400，脚本应确保 ensure 成功后再执行动作。
 
 当前限制：只操作主页面；暂不支持 iframe、新标签页切换、文件上传/下载。
 若登录流程会跳转到其他主机（SSO），当前 `expected_host` 校验会拒绝；需要
@@ -329,7 +360,10 @@ Content-Type: application/json
 当前示例脚本 `python_scripts/volcengine_login/login_and_mask_variables.py` 使用
 `volc_main_acct` / `volc_sub_username` / `volc_pwd`（登录后还执行变量掩码检查）；
 如果 `login_accounts` 使用其他参数名称，需修改 `FIELD_KEYS`，或按提示词重新
-生成脚本。
+生成脚本。脚本顶部 `CDP_PORT` / `ACCOUNT_NAME` 指定目标实例（默认 9222）；
+多账号时复制为独立脚本并修改这两个常量与 `FIELD_KEYS` 参数名称，端口使用
+9223–9999。非 9222 实例只提供 Cookie；若业务接口依赖 Authorization 则不适用
+多实例（只有 9222 抓包实例能观察 Authorization）。
 
 ## 6. 安全要求
 
@@ -350,9 +384,11 @@ Content-Type: application/json
 
 - 生成的目录包含：
   - `login.py`：脚本本体（只依赖 `requests`）；
-  - `README.md`：登录网址、**启动抓包 Chrome 的接口**、**用于判断登录态的
-    接口**、运行方式、验证码处理说明、登录账号等参数映射（页面输入字段
-    描述 -> 参数名称）、浏览器操作接口。
+  - `README.md`：登录网址、**目标 CDP 端口（`CDP_PORT`）**、**启动 CDP
+    实例的 ensure 接口**、**用于判断登录态的接口**、运行方式、验证码处理
+    说明、登录账号等参数映射（页面输入字段描述 -> 参数名称）、浏览器操作
+    接口；
+  - `prompt.md`：本次使用的完整提示词（含人工补充的要求）。
 - 运行结束打印：成功/失败、当前 URL、耗时；失败给出可读原因。
 - 生成后通过“快速执行脚本”运行一次验证；可交叉确认：
   `GET /api/cookies/cdp?url=<登录网址>` 返回登录态 Cookie（只用 CDP 接口）。
@@ -366,3 +402,45 @@ Content-Type: application/json
   在抓包 Chrome 启动参数中加入 `--remote-allow-origins=*`（服务侧调整）；
 - 安装体积/耗时、为何不需要 `playwright install chromium`、`browser.close()`
   只断连不关浏览器等实测结论，见 `docs/Playwright安装与CDP关系实测/README.md`。
+
+## 9. 多账号多 CDP 实例
+
+同一台电脑、同一个网站需要多个账号**分别长期登录**时，每个账号使用
+**独立的登录脚本 + 独立的 CDP 端口**，互不踢下线：
+
+| 项 | 规则 |
+|---|---|
+| 默认实例 | 9222 为抓包实例，自动登记、受保护；继续使用旧 profile 目录 |
+| 账号实例 | 9223–9999，由脚本显式指定；端口创建后不可变 |
+| 创建方式 | 脚本启动时 `POST /api/cdp-profiles/ensure`，按端口自动创建并启动 |
+| 数据目录 | 默认 `<抓包数据目录>_<端口>`，使用空 profile，不复制日常 Chrome 数据 |
+| 并发 | 浏览器动作锁按端口：不同实例可并发，同一实例串行 |
+| 抓包/插件 | 只有 9222 抓包、安装插件；账号实例不抓包、不装插件 |
+| Authorization | 账号实例不提供（不抓包，没有观察缓存）；依赖 Authorization 的网站暂不适用 |
+| 删除 | 删除实例只移除登记，保留 profile 目录；同端口再次 ensure 接管旧目录与登录态 |
+| 端口占用 | 端口被其他程序或未登记的 Chrome 占用时报错，不杀进程、不抢占 |
+
+账号参数通过**不同参数名称**区分，`login_accounts` 仍为扁平 Map：
+
+```json
+{
+  "acct1_user": "user1",
+  "acct1_pwd": "dpapi:v1:...",
+  "acct2_user": "user2",
+  "acct2_pwd": "dpapi:v1:..."
+}
+```
+
+实例 1 的映射使用 `acct1_user` / `acct1_pwd`，实例 2 使用另一套；生成脚本
+时不要复用同一套参数名称。
+
+运行两个实例的脚本时：
+
+```text
+login_acct1.py  -> CDP_PORT = 9223
+login_acct2.py  -> CDP_PORT = 9224
+```
+
+`/api/cdp-profiles/ensure` 会分别创建/启动两个实例；
+`/api/cookies/cdp?port=9223` 与 `?port=9224` 返回各自 Cookie。
+端口由脚本固定，不自动分配、不要求连续递增。

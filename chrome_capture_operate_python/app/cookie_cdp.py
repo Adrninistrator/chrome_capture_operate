@@ -140,6 +140,8 @@ async def fetch_cdp_cookies(cdp_port, timeout=10):
 async def query_cdp(url_or_host, cdp_port):
     """对外主入口（Cookie 部分）：按主机过滤，返回 (cookies, error)。
 
+    cdp_port 可为任一已启动的 CDP 实例端口（抓包实例或登录实例）。
+
     cookies 为 None 时 err 为用户可读的失败原因（用于 HTTP 404 响应）；
     成功时 err 为 None，cookies 为归一化 + 分区去重后的列表，条目格式与
     /api/cookies/query 的 cookies[] 完全一致（cookie_header 由调用方经
@@ -151,13 +153,13 @@ async def query_cdp(url_or_host, cdp_port):
     try:
         all_cookies = await fetch_cdp_cookies(cdp_port)
     except Exception as e:
-        return None, ("CDP 读取失败（抓包 Chrome 未启动或调试端口 %d 不可达）: %s"
+        return None, ("CDP 读取失败（CDP Chrome 未启动或调试端口 %d 不可达）: %s"
                       % (cdp_port, e))
     matched = [_normalize(c) for c in all_cookies
                if _match(c.get("domain"), host)]
     if not matched:
-        return None, ("没有与主机 %s 匹配的 Cookie（抓包 Chrome 中可能未登录该站点）"
-                      % host)
+        return None, ("没有与主机 %s 匹配的 Cookie（CDP Chrome 端口 %d 中可能未登录该站点）"
+                      % (host, cdp_port))
     return _dedup_partition(matched, host), None
 
 

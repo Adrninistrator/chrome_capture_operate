@@ -1,8 +1,11 @@
-"""入口：防重复启动 -> 日志 -> 系统托盘线程 -> uvicorn 主线程。
+"""唯一启动入口：防重复启动 -> 日志 -> 系统托盘线程 -> uvicorn 主线程。
 
-start.bat 以 pythonw 启动，无控制台；错误通过日志与弹窗呈现。
+start.bat 与 PyCharm 都运行本模块（start.bat 只负责选择解释器）：
+- 启动成功：/health 就绪后右下角弹出自动关闭提示；
+- 启动失败/已在运行/端口被占用：同样弹出自动关闭提示（不阻塞）；
+- `.venv` 缺失时 start.bat 用系统 Python 运行 `app.main --venv-check`，
+  由本模块弹出“请先运行 install.bat”提示。
 """
-import ctypes
 import logging
 import os
 import socket
@@ -34,10 +37,48 @@ def already_running(port):
 
 
 def msgbox(text, title="chrome_capture_operate"):
+    """右下角自动关闭提示（10 秒），不阻塞、无需点击。
+
+    start.bat 与 PyCharm 使用同一入口 app.main，因此启动失败/已在运行
+    的提示行为一致。提示由独立进程 tkinter 窗口呈现，主程序可立即退出。
+    """
     try:
-        ctypes.windll.user32.MessageBoxW(0, text, title, 0x40)
+        from . import popup_notify
+        popup_notify.notify(title, text, 10)
+    except Exception as e:
+        log.warning("启动提示弹窗失败: %s", e)
+
+
+def _health_ok(port):
+    """本程序的 /health 是否可访问（区分“已在运行”与端口被其他程序占用）。"""
+    import urllib.request
+    try:
+        with urllib.request.urlopen(
+                "http://127.0.0.1:%d/health" % port, timeout=1) as r:
+            return r.status == 200
     except Exception:
-        pass
+        return False
+
+
+def _startup_notifier(port):
+    """等待本程序 /health 就绪后提示启动成功；失败由 main 的错误路径提示。"""
+    import time as _time
+    import urllib.request
+    from . import popup_notify
+    url = "http://127.0.0.1:%d" % port
+    deadline = _time.time() + 20
+    while _time.time() < deadline:
+        try:
+            with urllib.request.urlopen(url + "/health", timeout=0.5) as r:
+                if r.status == 200:
+                    popup_notify.notify(
+                        "启动成功", "chrome_capture_operate 已启动：%s" % url, 6)
+                    return
+        except Exception:
+            pass
+        _time.sleep(0.2)
+    popup_notify.notify(
+        "启动失败", "主程序在 20 秒内未就绪\n请查看 log 目录", 10)
 
 
 def _tray_image():
@@ -144,7 +185,17 @@ def _start_tray_with_holder(port, on_quit, holder):
         pystray.Icon = original_icon_cls
 
 
-def main():
+def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    # start.bat 在 .venv 缺失时用系统 Python 运行本模式：只弹提示并退出，
+    # 不导入第三方依赖（此时 venv 不可用）。
+    if "--venv-check" in argv:
+        # 此处尚未执行 setup_logging（其返回值绑定到 main 局部变量 log），
+        # 使用模块级 logger，避免 UnboundLocalError
+        logging.getLogger("app").error("启动失败：.venv 不存在或不完整")
+        msgbox(".venv 不存在或不完整\n请先运行 install.bat 安装依赖",
+               "启动失败")
+        sys.exit(1)
     os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     ensure_dirs()
     log, log_path = setup_logging()
@@ -164,9 +215,13 @@ def main():
         sys.exit(1)
 
     if already_running(port):
-        log.error("端口 %d 已被占用，程序已在运行，不支持重复启动", port)
-        msgbox("chrome_capture_operate 已在运行（端口 %d），不支持重复启动"
-               % port)
+        if _health_ok(port):
+            log.error("端口 %d 已被本程序占用，已在运行，不支持重复启动", port)
+            msgbox("chrome_capture_operate 已在运行（端口 %d），不支持重复启动"
+                   % port)
+            sys.exit(0)
+        log.error("端口 %d 已被其他程序占用", port)
+        msgbox("端口 %d 已被其他程序占用，请检查后重试" % port)
         sys.exit(1)
 
     # 自启动同步：参数值（是否自启动）在全局配置文件（需求），注册表为
@@ -250,6 +305,9 @@ def main():
             log.warning("自动打开浏览器失败: %s", e)
 
     threading.Thread(target=_open_browser_after_ready, daemon=True).start()
+    # 启动结果提示（与 start.bat 无关，PyCharm 直接运行同一入口也有）
+    threading.Thread(target=_startup_notifier, args=(port,),
+                     daemon=True).start()
 
     try:
         server.run()

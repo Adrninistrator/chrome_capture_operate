@@ -186,18 +186,37 @@ def start_chrome_with_profile(user_data_dir, cdp_port=None):
     return True, "Chrome 已启动（数据目录 %s）" % user_data_dir
 
 
-def start_capture_chrome(cdp_port):
-    """启动用于抓包的 Chrome。已启动则不重复启动。返回 (ok, message)。"""
+def is_port_occupied(cdp_port):
+    """端口是否已有监听（不区分 CDP / 其他程序），短超时避免阻塞。"""
+    try:
+        s = socket.create_connection(("127.0.0.1", cdp_port), timeout=0.2)
+        s.close()
+        return True
+    except OSError:
+        return False
+
+
+def start_cdp_chrome(cdp_port, profile_dir, wait_seconds=15):
+    """以指定数据目录与调试端口启动一个 CDP Chrome 实例。
+
+    多账号多 CDP 实例（docs/自动登录脚本/多账号多CDP实例方案.md）的统一
+    启动入口：每个实例独立 ``--user-data-dir`` 与 ``--remote-debugging-port``；
+    启动后等待 CDP 端口就绪（最多 wait_seconds 秒）。已启动则不重复启动。
+    返回 (ok, message)。
+    """
     if is_cdp_alive(cdp_port, force=True):
         return True, "调试端口 %d 的 Chrome 已在运行，未重复启动" % cdp_port
     chrome = find_chrome()
     if not chrome:
         return False, "未找到 Chrome 安装路径（注册表与常见路径均未命中）"
-    copy_profile()
+    try:
+        os.makedirs(profile_dir, exist_ok=True)
+    except OSError as e:
+        return False, "创建数据目录失败（%s）: %s" % (profile_dir, e)
     args = [
         chrome,
         "--remote-debugging-port=%d" % cdp_port,
-        "--user-data-dir=%s" % PROFILE_DIR,
+        "--user-data-dir=%s" % profile_dir,
         "--no-first-run",
         "--no-default-browser-check",
         "--disable-session-crashed-bubble",
@@ -211,13 +230,26 @@ def start_capture_chrome(cdp_port):
         )
     except OSError as e:
         return False, "启动 Chrome 失败: %s" % e
-    # 等待 CDP 端口就绪（最多 15 秒）——刚拉起必须真实探测（force）
-    import time
-    for _ in range(30):
+    # 等待 CDP 端口就绪——刚拉起必须真实探测（force）
+    deadline = time.time() + max(1, wait_seconds)
+    while time.time() < deadline:
         if is_cdp_alive(cdp_port, force=True):
-            return True, "Chrome 已启动，CDP 端口 %d" % cdp_port
+            return True, "Chrome 已启动，CDP 端口 %d（数据目录 %s）" % (
+                cdp_port, profile_dir)
         time.sleep(0.5)
     return False, "Chrome 进程已拉起但 CDP 端口 %d 未就绪（可能被占用）" % cdp_port
+
+
+def start_capture_chrome(cdp_port):
+    """启动用于抓包的默认实例（兼容入口）。
+
+    保留旧行为：启动前把日常 Chrome 的收藏夹/历史/用户名拷贝到抓包
+    profile；内部复用 start_cdp_chrome。返回 (ok, message)。
+    """
+    if is_cdp_alive(cdp_port, force=True):
+        return True, "调试端口 %d 的 Chrome 已在运行，未重复启动" % cdp_port
+    copy_profile()
+    return start_cdp_chrome(cdp_port, PROFILE_DIR)
 
 
 def chrome_version(cdp_port):

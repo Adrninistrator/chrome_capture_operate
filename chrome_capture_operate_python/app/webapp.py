@@ -14,6 +14,7 @@ import re
 import subprocess
 from contextlib import asynccontextmanager
 from datetime import datetime
+from typing import Any
 
 from fastapi import FastAPI, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse)
@@ -21,20 +22,23 @@ from pydantic import BaseModel
 from starlette.staticfiles import StaticFiles
 
 from . import browser_actions as browser_actions_mod
+from . import cdp_profiles
 from . import chrome_proc
 from . import secret_store
 from . import cookie_cdp
 from . import cookie_query_log
 from . import globalconf
 from . import mcpserver
+from . import wecom
 from .capture import (MARK_SUFFIX, STATE_IDLE, CaptureManager,
                       evaluate_violation, list_history_sessions,
                       noise_candidates_from_index, parse_index_records,
                       purge_history_session, rename_with_retry,
                       session_path)
 from .config import (ANALYSIS_GUIDE_PATH, API_DOC_PATH, AUTO_LOGIN_GUIDE_PATH,
-                     BASE_DIR, EXTENSION_DIR, LOG_DIR, PROJECT_ROOT,
-                     SCRIPTS_EXAMPLE_DIR, Config, ensure_dirs, get_auto_start)
+                     BASE_DIR, BROWSER_ACTIONS_DOC_PATH, EXTENSION_DIR, LOG_DIR,
+                     PROJECT_ROOT, SCRIPTS_EXAMPLE_DIR, WECOM_DOC_PATH, Config,
+                     ensure_dirs, get_auto_start)
 from .cookie_store import CookieStore
 from .executor import Executor, list_scripts, script_roots
 from .scheduler import Scheduler, describe_schedule
@@ -339,15 +343,22 @@ def create_app(tray_on_change=None, tray_notify=None):
     scheduler = Scheduler(config)
     ws_clients = WSClients()
     capture.on_event = ws_clients.broadcast
+    # 企业微信消息通道（脚本获取短信验证码/动态 Token）；未配置时不启动
+    wecom_service = wecom.WecomService()
 
     @asynccontextmanager
     async def lifespan(app):
         # 定时执行脚本的调度循环（uvicorn 启动时开启，退出时停止）
         loop_task = asyncio.create_task(scheduler.run_loop())
-        yield
-        loop_task.cancel()
+        await wecom_service.start()
+        try:
+            yield
+        finally:
+            await wecom_service.stop()
+            loop_task.cancel()
 
     app = FastAPI(title="chrome_capture_operate", lifespan=lifespan)
+    app.state.wecom_service = wecom_service
 
     # ---------------- MCP 服务（SSE 协议，URI 区分：/mcp/sse） ----------------
     # 工具与 REST 端点同源（同一批 capture/store/executor/config 实例）。
@@ -577,16 +588,24 @@ def create_app(tray_on_change=None, tray_notify=None):
         return {"ok": True, "status": "running",
                 "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 
+    def _capture_port():
+        """默认抓包实例端口（参数配置的 cdp_port，默认 9222）。"""
+        return cdp_profiles.capture_port_of(config.get("cdp_port"))
+
     @app.get("/api/status")
     async def status():
         port = config.get("port")
         # chrome_alive 探测（缓存未命中时是同步 HTTP，可能阻塞数秒）放
         # 后台线程，避免卡住事件循环拖慢所有接口
         base = await asyncio.to_thread(capture.status)
+        # CDP 实例的存活探测同样是同步 HTTP，一并放到后台线程；只读不写配置
+        cdp_list = await asyncio.to_thread(
+            cdp_profiles.status_profiles, _capture_port())
         return {
             **base,
             "port": port,
             "cdp_port": config.get("cdp_port"),
+            "cdp_profiles": cdp_list,
             "cookie_total": store.total(),
             "last_push_time": store.last_push_time,
         }
@@ -594,8 +613,14 @@ def create_app(tray_on_change=None, tray_notify=None):
     # ---------------- Chrome 进程 ----------------
     @app.post("/api/chrome/start")
     async def chrome_start():
-        ok, msg = await asyncio.to_thread(
-            chrome_proc.start_capture_chrome, config.get("cdp_port"))
+        """启动默认抓包实例（兼容入口，内部复用 CDP 实例 ensure/启动）。"""
+        try:
+            info = await asyncio.to_thread(
+                cdp_profiles.ensure_profile, _capture_port(),
+                cdp_profiles.CAPTURE_NAME, _capture_port())
+            ok, msg = True, info["message"]
+        except cdp_profiles.CdpProfileError as e:
+            ok, msg = False, e.message
         if ok:
             try:
                 await capture.ensure_cdp()
@@ -686,6 +711,102 @@ def create_app(tray_on_change=None, tray_notify=None):
         log.info("删除多开实例: 编号%d", profile_id)
         return {"ok": True}
 
+
+    # ---------------- CDP Chrome 实例（多账号自动登录） ----------------
+    # 配置存全局配置 cdp_chrome_profiles：[{name, port, profile_dir,
+    # auto_created, created}]；端口为唯一标识。9222（默认抓包实例）自动
+    # 登记、禁止删除/改端口；9223–9999 由自动登录脚本按需 ensure 创建。
+    # 设计：docs/自动登录脚本/多账号多CDP实例方案.md
+
+    class CdpProfileBody(BaseModel):
+        name: str = ""
+        port: int
+        profile_dir: str | None = None
+
+    class CdpProfileRenameBody(BaseModel):
+        name: str
+
+    class CdpEnsureBody(BaseModel):
+        port: int
+        name: str = ""
+
+    def _cdp_err(e):
+        return JSONResponse(e.to_dict(), status_code=e.status_code)
+
+    @app.get("/api/cdp-profiles")
+    async def cdp_profiles_list():
+        """CDP 实例列表（含自动登记的默认抓包实例与实时 CDP 状态）。"""
+        cp = _capture_port()
+        profiles = await asyncio.to_thread(
+            cdp_profiles.list_profiles, cp, True)
+        return {"profiles": profiles, "capture_port": cp}
+
+    @app.post("/api/cdp-profiles")
+    async def cdp_profiles_add(body: CdpProfileBody):
+        try:
+            item = await asyncio.to_thread(
+                cdp_profiles.create_profile, body.name, body.port,
+                body.profile_dir, _capture_port())
+        except cdp_profiles.CdpProfileError as e:
+            return _cdp_err(e)
+        return {"ok": True, "profile": item}
+
+    @app.put("/api/cdp-profiles/{port}")
+    async def cdp_profiles_update(port: int, body: CdpProfileRenameBody):
+        """修改实例名称；端口创建后不可变。"""
+        try:
+            item = await asyncio.to_thread(
+                cdp_profiles.rename_profile, port, body.name, _capture_port())
+        except cdp_profiles.CdpProfileError as e:
+            return _cdp_err(e)
+        return {"ok": True, "profile": item}
+
+    @app.delete("/api/cdp-profiles/{port}")
+    async def cdp_profiles_delete(port: int):
+        """删除登记，默认保留 profile 目录；默认抓包实例禁止删除。"""
+        try:
+            info = await asyncio.to_thread(
+                cdp_profiles.delete_profile, port, _capture_port())
+        except cdp_profiles.CdpProfileError as e:
+            return _cdp_err(e)
+        return info
+
+    @app.post("/api/cdp-profiles/{port}/open")
+    async def cdp_profiles_open(port: int):
+        try:
+            info = await asyncio.to_thread(
+                cdp_profiles.open_profile, port, _capture_port())
+        except cdp_profiles.CdpProfileError as e:
+            return _cdp_err(e)
+        return info
+
+    @app.post("/api/cdp-profiles/{port}/bring-to-front")
+    async def cdp_profiles_bring_to_front(port: int):
+        if not cdp_profiles.is_known_port(port, _capture_port()):
+            return JSONResponse(
+                {"ok": False, "message": "端口 %d 的实例未登记" % port},
+                status_code=404)
+        ok, msg = await asyncio.to_thread(
+            chrome_proc.bring_chrome_to_front, port)
+        if not ok:
+            return JSONResponse({"ok": False, "message": msg},
+                                status_code=400)
+        return {"ok": True, "message": msg, "port": port}
+
+    @app.post("/api/cdp-profiles/ensure")
+    async def cdp_profiles_ensure(body: CdpEnsureBody):
+        """按端口 ensure：不存在则自动创建，然后启动并等待 CDP 就绪。
+
+        自动登录脚本每个账号显式指定固定端口，启动时调用本接口；
+        并发 ensure 同一端口幂等，只创建一个实例。
+        """
+        try:
+            info = await asyncio.to_thread(
+                cdp_profiles.ensure_profile, body.port, body.name,
+                _capture_port())
+        except cdp_profiles.CdpProfileError as e:
+            return _cdp_err(e)
+        return info
 
     # ---------------- 抓包 ----------------
     @app.get("/api/capture/config")
@@ -1268,22 +1389,33 @@ def create_app(tray_on_change=None, tray_notify=None):
 
     @app.get("/api/cookies/cdp")
     async def cookies_cdp(url: str = Query(...), port: int = Query(0)):
-        """经 CDP 实时读取抓包 Chrome 的 Cookie 与观察到的 Authorization。
+        """经 CDP 实时读取指定 CDP 实例的 Cookie 与（仅抓包实例）Authorization。
 
         Cookie 实时来自 Storage.getCookies（含 httpOnly/分区 Cookie）；
         Authorization 来自抓包期间观察到的请求头缓存（精确主机匹配）。
         与 /api/cookies/query 互补（query=日常 Chrome 插件快照）。
-        port=0 时用配置的 cdp_port；port 仅影响 Cookie 读取，Authorization
-        观察来自配置实例的抓包事件流。
+
+        port=0 时用配置的 cdp_port。正式接口只允许抓包端口或已登记的
+        CDP 实例端口（多账号多 CDP 实例方案 14.7）。非抓包实例只返回
+        Cookie——它们不抓包、不安装插件，没有 Authorization 观察缓存
+        （方案 5.7/14.3）。
         """
-        cdp_port = port or config.get("cdp_port")
+        cp = _capture_port()
+        cdp_port = cdp_profiles.capture_port_of(port or cp)
         host = cookie_cdp.parse_host(url)
         if not host:
             return JSONResponse(
                 {"ok": False, "error": "缺少 url 参数或无法解析主机名"},
                 status_code=404)
+        if not cdp_profiles.is_known_port(cdp_port, cp):
+            return JSONResponse(
+                {"ok": False,
+                 "error": "CDP 端口 %d 未登记：只允许抓包端口 %d 或"
+                          "已登记的 CDP 实例端口" % (cdp_port, cp)},
+                status_code=400)
+        is_capture = cdp_profiles.is_capture_port(cdp_port, cp)
         cookies, cookie_err = await cookie_cdp.query_cdp(url, cdp_port)
-        auth_entry = cookie_cdp.auth_cache.get(host)
+        auth_entry = cookie_cdp.auth_cache.get(host) if is_capture else None
         # 与现有 query 兼容口径一致：cookie 与 Authorization 均无命中才 404
         if cookie_err and not auth_entry:
             log.info("CDP获取cookie请求 url=%s port=%d 失败: %s",
@@ -1345,6 +1477,21 @@ def create_app(tray_on_change=None, tray_notify=None):
             return {"error": "读取使用说明失败: %s" % e}
 
     # ---------------- 全局配置 ----------------
+    @app.get("/api/global_conf/file")
+    async def global_conf_file():
+        """下载全局配置文件（global_conf.json）。
+
+        包含登录账号密码的 DPAPI 密文、企业微信长连接密钥密文等，仅供
+        本机用户在参数配置页下载备份；服务仅监听 127.0.0.1。
+        """
+        path = os.path.abspath(globalconf.GLOBAL_CONF_PATH)
+        if not os.path.isfile(path):
+            return JSONResponse(
+                {"error": "全局配置文件不存在（尚未保存过全局参数）"},
+                status_code=404)
+        return FileResponse(path, media_type="application/json",
+                            filename="global_conf.json")
+
     @app.get("/api/global_conf")
     async def global_conf_get(key: str = Query(...)):
         return {"key": key, "value": globalconf.get_value(key)}
@@ -1374,6 +1521,103 @@ def create_app(tray_on_change=None, tray_notify=None):
             return JSONResponse({"error": "写入全局配置文件失败"},
                                 status_code=500)
         return {"ok": True, "key": body.key, "value": value}
+
+    # ---------------- 企业微信消息（短信验证码/动态 Token） ----------------
+    # 参考 wecom-aibot/send_recv_wecom_msg，移植为项目内模块 app/wecom.py：
+    # 配置存全局配置 wecom_config（参数配置页维护，secret 为 DPAPI 密文）；
+    # 后台 WSS 长连接随应用生命周期启动/停止，配置变更时重启。
+    # 接口说明只在 api/wecom-message.md 中维护。
+
+    class WecomConfigBody(BaseModel):
+        bot_id: Any = ""
+        secret: Any = None       # 留空保持原密钥
+        chat_id: Any = ""
+        chat_type: Any = 1
+        reply_ttl: Any = 300
+        ws_url: Any = ""
+
+    class WecomSendBody(BaseModel):
+        seq: Any = None
+        content: Any = None
+
+    @app.get("/api/wecom/config")
+    async def wecom_config_get():
+        return {"ok": True, "config": await asyncio.to_thread(
+            wecom.public_config), "status": wecom_service.status()}
+
+    @app.put("/api/wecom/config")
+    async def wecom_config_put(body: WecomConfigBody):
+        try:
+            cfg = await asyncio.to_thread(wecom.save_config,
+                                          body.model_dump())
+            await wecom_service.apply_config(cfg)
+        except wecom.WecomConfigError as e:
+            return JSONResponse({"ok": False, "error": e.message},
+                                status_code=e.status_code)
+        return {"ok": True, "config": await asyncio.to_thread(
+            wecom.public_config), "status": wecom_service.status()}
+
+    @app.delete("/api/wecom/config")
+    async def wecom_config_delete():
+        """清除配置并停用企业微信消息功能。"""
+        try:
+            await asyncio.to_thread(wecom.clear_config)
+        except wecom.WecomConfigError as e:
+            return JSONResponse({"ok": False, "error": e.message},
+                                status_code=e.status_code)
+        await wecom_service.apply_config(None)
+        return {"ok": True, "config": wecom.public_config(),
+                "status": wecom_service.status()}
+
+    @app.get("/api/wecom/status")
+    async def wecom_status():
+        return {"ok": True, "status": wecom_service.status()}
+
+    @app.post("/api/wecom/send_message")
+    async def wecom_send_message(body: WecomSendBody):
+        """发送企业微信消息：只需消息内容与 4 位消息序号。"""
+        try:
+            wecom.validate_seq(body.seq)
+            wecom.validate_content(body.content)
+        except ValueError as e:
+            return JSONResponse({"errcode": 400, "errmsg": str(e)},
+                                status_code=400)
+        try:
+            return await wecom_service.send(body.seq, body.content)
+        except wecom.SeqConflictError as e:
+            return JSONResponse(
+                {"errcode": 409, "errmsg": "%s，请重新生成" % e},
+                status_code=409)
+        except wecom.NotConfiguredError as e:
+            return JSONResponse({"errcode": 503, "errmsg": str(e)},
+                                status_code=503)
+        except wecom.NotConnectedError as e:
+            return JSONResponse({"errcode": 503, "errmsg": str(e)},
+                                status_code=503)
+        except wecom.WecomError as e:
+            return JSONResponse({"errcode": 502, "errmsg": str(e)},
+                                status_code=502)
+        except Exception as e:
+            log.error("企业微信发送异常: %s: %s", type(e).__name__, e)
+            return JSONResponse(
+                {"errcode": 500, "errmsg": "企业微信发送异常"},
+                status_code=500)
+
+    @app.get("/api/wecom/get_reply")
+    async def wecom_get_reply(seq: str = Query("")):
+        """获取企业微信回复消息：只按 4 位消息序号查询。"""
+        try:
+            wecom.validate_seq(seq)
+        except ValueError as e:
+            return JSONResponse(
+                {"success": False, "message": str(e), "reply": None},
+                status_code=400)
+        try:
+            return wecom_service.get_reply(seq)
+        except wecom.NotConfiguredError as e:
+            return JSONResponse(
+                {"success": False, "message": str(e), "reply": None},
+                status_code=503)
 
     # ---------------- 快速执行 ----------------
     @app.get("/api/scripts")
@@ -1563,6 +1807,10 @@ def create_app(tray_on_change=None, tray_notify=None):
     async def get_conf():
         d = config.as_dict()
         d["auto_start"] = get_auto_start()
+        # 参数配置页展示全局配置文件路径与下载（登录账号/企业微信/定时任务等）
+        global_conf_path = os.path.abspath(globalconf.GLOBAL_CONF_PATH)
+        d["global_conf_path"] = global_conf_path
+        d["global_conf_exists"] = os.path.isfile(global_conf_path)
         return d
 
     class ConfBody(BaseModel):
@@ -1671,7 +1919,9 @@ def create_app(tray_on_change=None, tray_notify=None):
             "是否有入参，执行逻辑是什么）",
         ]
         return {"prompt": "\n".join(lines),
-                "scripts_root_configured": bool(scripts_root)}
+                "scripts_root_configured": bool(scripts_root),
+                # 企业微信消息文档路径：d 标签页说明用（与脚本目录是否配置无关）
+                "wecom_doc_path": os.path.abspath(WECOM_DOC_PATH)}
 
     # ---------------- 自动登录脚本提示词（2026-10-20） ----------------
     @app.get("/api/login_script_prompt")
@@ -1692,9 +1942,15 @@ def create_app(tray_on_change=None, tray_notify=None):
         params_api = base + "/api/login_accounts/params"
         browser_api = base + "/api/browser/actions"
         chrome_start_api = base + "/api/chrome/start"
+        cdp_ensure_api = base + "/api/cdp-profiles/ensure"
+        cookies_cdp_api = base + "/api/cookies/cdp"
+        cp = _capture_port()
         text = (
             "# 任务参数\n"
             "- 登录网址：__LOGIN_URL__\n"
+            "- CDP 端口：__CDP_PORT__（默认抓包实例；同一网站多账号同时登录时，"
+            "改为该账号对应的 CDP 实例端口）\n"
+            "- CDP 实例名称：__ACCOUNT_NAME__（仅用于创建实例时显示）\n"
             "- 登录账号等参数映射：\n"
             "__LOGIN_MAPPINGS__\n"
             "\n"
@@ -1703,18 +1959,40 @@ def create_app(tray_on_change=None, tray_notify=None):
             "- chrome-operate：抓包、获取抓包会话与记录、run_script 运行临时脚本\n"
             "- 以上 MCP 仅用于脚本生成阶段；生成的 login.py 不得使用 MCP。\n"
             "\n"
+            "# 参考文档（实现细节以文档为准）\n"
+            "- 自动登录脚本实现要求：%s\n"
+            "- 浏览器动作接口契约：%s\n"
+            "- Cookie/Authorization 获取与脚本编写约定：%s\n"
+            "\n"
             "# 脚本实现要求\n"
-            "- 启动抓包 Chrome：POST __CHROME_START_URL__\n"
+            "- 确保 CDP 实例已启动：POST __CDP_ENSURE_URL__\n"
+            "- 读取登录态 Cookie：GET __COOKIES_CDP_URL__?url=__LOGIN_URL__"
+            "&port=__CDP_PORT__\n"
             "- 浏览器操作接口：POST __BROWSER_ACTIONS_URL__\n"
-            "- 详细要求见 %s\n"
+            "- 9222 抓包实例兼容入口：POST __CHROME_START_URL__\n"
+            "- 接口参数、动作字段、登录态判断、两阶段流程与输出文件要求均见参考文档。\n"
+            "\n"
+            "# 要求填写\n"
+            "__EXTRA_REQUIREMENTS__\n"
             "\n"
             "# 输出\n"
-            "在 %s 下生成新的目录；目录内文件与 README 内容按上述文档要求生成。\n"
+            "在 %s 下生成新的目录，至少包含以下文件：\n"
+            "- login.py\n"
+            "- README.md\n"
+            "- prompt.md：本次使用的完整提示词（含人工补充的要求）\n"
         ) % (os.path.abspath(AUTO_LOGIN_GUIDE_PATH),
+             os.path.abspath(BROWSER_ACTIONS_DOC_PATH),
+             os.path.abspath(API_DOC_PATH),
              os.path.abspath(scripts_root))
         return {"prompt": text, "scripts_root": scripts_root,
                 "params_api": params_api, "browser_api": browser_api,
-                "chrome_start_api": chrome_start_api}
+                "chrome_start_api": chrome_start_api,
+                "cdp_ensure_api": cdp_ensure_api,
+                "cookies_cdp_api": cookies_cdp_api,
+                "cdp_port": cp,
+                "account_name": cdp_profiles.default_name(cp, cp),
+                # 企业微信消息功能文档路径：只在 d 标签页展示（按需写进提示词）
+                "wecom_doc_path": os.path.abspath(WECOM_DOC_PATH)}
 
     # ---------------- 登录账号信息（global_conf.json 的 login_accounts） ----------------
     class LoginEntryBody(BaseModel):
@@ -1880,6 +2158,10 @@ def create_app(tray_on_change=None, tray_notify=None):
         expected_host: str
         actions: list[BrowserActionBody]
         timeout_ms: int = 60000
+        # 目标 CDP 实例：显式 port；cdp_profile_id 为兼容别名（等同端口，
+        # 本方案的实例唯一标识就是端口）。都不传时使用配置的抓包端口。
+        port: int | None = None
+        cdp_profile_id: int | None = None
 
     @app.post("/api/browser/actions")
     async def browser_actions_run(body: BrowserActionsBody):
@@ -1889,6 +2171,22 @@ def create_app(tray_on_change=None, tray_notify=None):
         login_accounts 解析，不返回给调用方，也不记录。
         """
         actions = [a.model_dump(exclude_none=True) for a in body.actions]
+        cp = _capture_port()
+        # 解析顺序：显式 port；cdp_profile_id 对应端口；配置抓包端口
+        if (body.port is not None and body.cdp_profile_id is not None
+                and int(body.port) != int(body.cdp_profile_id)):
+            return JSONResponse(
+                {"ok": False, "error": "port 与 cdp_profile_id 不一致"},
+                status_code=400)
+        target_port = body.port if body.port is not None else body.cdp_profile_id
+        target_port = cdp_profiles.capture_port_of(
+            target_port if target_port is not None else cp)
+        if not cdp_profiles.is_known_port(target_port, cp):
+            return JSONResponse(
+                {"ok": False,
+                 "error": "CDP 端口 %d 未登记：只允许抓包端口 %d 或"
+                          "已登记的 CDP 实例端口" % (target_port, cp)},
+                status_code=400)
         try:
             accounts = _read_login_accounts()
         except secret_store.SecretStoreError as e:
@@ -1898,8 +2196,7 @@ def create_app(tray_on_change=None, tray_notify=None):
         try:
             browser_actions_mod.validate_actions(actions, accounts)
             return await asyncio.to_thread(
-                browser_actions_mod.run_actions,
-                int(config.get("cdp_port") or 9222),
+                browser_actions_mod.run_actions, target_port,
                 body.url, body.expected_host, actions, body.timeout_ms,
                 accounts)
         except browser_actions_mod.BrowserActionError as e:
