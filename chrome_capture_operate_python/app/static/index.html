@@ -360,6 +360,13 @@ button.btn.chrome-top:disabled { background: #ccd3da; color: #f4f6f8; cursor: de
   <div class="card">
     <b>企业微信消息</b> <span class="muted">（脚本获取短信验证码、动态 Token 等；保存到全局配置文件）</span>
     <div class="muted" style="margin-top:6px">配置企业微信智能机器人（API 模式 → 长连接）后，脚本执行到需要人工提供验证码/Token 时，可发消息通知用户并读取回复。企业微信要求用户先给机器人发过一条消息，机器人才能主动推送；同一机器人只能保持一个长连接。</div>
+    <div class="cfg-box" style="border-color:#e0b4ae;background:#fff5f3;margin:10px 0 0">
+      <div style="color:#b3392e;font-weight:700;font-size:14px">⚠ 多应用必须使用独立的机器人</div>
+      <div style="margin-top:6px;color:#7a2e26;line-height:1.8">企业微信同一机器人同一时间只能保持一个有效长连接，新连接订阅后会踢掉旧连接——多个应用/服务（多个自动化脚本、多个环境、多个 chrome_capture_operate 实例等）共用同一机器人会互相踢线导致消息收不到。每个应用请单独创建机器人，使用独立的 bot_id 与 secret。</div>
+    </div>
+    <div class="row" style="margin:8px 0 0">
+      <button class="btn" id="btnWecomCreateHelp" title="查看企业微信机器人创建步骤与多应用独立机器人说明">企业微信机器人创建说明</button>
+    </div>
     <table style="margin-top:10px; width:100%">
       <tr><th style="width:200px">机器人 BotID</th><td>
         <input type="text" id="wecomBotId" style="width:420px" placeholder="企业微信后台获取的机器人 ID" title="企业微信智能机器人的 BotID">
@@ -1551,6 +1558,33 @@ function openWecomHelp() {
     '<li>如需在生成的 login.py 中使用，请在 d 页面提示词的“# 要求填写”节填写以上要求；默认提示词不包含该功能。</li>' +
     '</ul>' +
     '<div class="muted" style="margin-top:10px">该功能不属于高频操作，单独弹框展示，不占用 d 页面空间。</div>' +
+    '</div>';
+  $('#overlay3').style.display = 'block';
+}
+
+/* 参数配置页：企业微信机器人创建说明（低频说明，独立弹框） */
+function openWecomCreateHelp() {
+  $('#popTitle3').textContent = '企业微信机器人创建说明';
+  $('#popBody3').innerHTML =
+    '<div style="font-size:13px;line-height:1.9">' +
+    '<div class="cfg-box" style="border-color:#e0b4ae;background:#fff5f3;margin:0 0 10px">' +
+    '<div style="color:#b3392e;font-weight:700;font-size:14px">⚠ 多应用必须使用独立的机器人</div>' +
+    '<div style="margin-top:6px;color:#7a2e26">企业微信的一个机器人默认只对应一个应用 / 一个收消息通道，不能多个应用同时绑定同一个机器人读取消息。</div>' +
+    '<div style="margin-top:4px;color:#7a2e26">如果有多套系统或应用都需要通过企业微信接收消息（例如多个自动化脚本、多个工作流平台、多个部署环境），需要为每个应用单独创建并配置对应的企业微信机器人，各自使用独立的 bot_id 和 secret。</div>' +
+    '<div style="margin-top:4px;color:#7a2e26"><b>原因：</b>企业微信规定同一机器人同一时间只能保持一个有效长连接，新连接完成订阅后会踢掉旧连接。多个服务绑定同一个机器人会互相踢线，导致消息收发不稳定（chrome_capture_operate 收不到回复）。</div>' +
+    '</div>' +
+    '<div><b>创建步骤</b></div>' +
+    '<ol style="margin:6px 0 0 20px;padding:0">' +
+    '<li>点击企业微信左侧边栏「机器人」菜单</li>' +
+    '<li>点击「创建机器人」，填写名称</li>' +
+    '<li>选择「API 模式」</li>' +
+    '<li>连接方式选择「使用长连接」</li>' +
+    '<li>复制 Bot ID 与 Secret</li>' +
+    '<li>使用模式：使用方式选择「仅个人使用」</li>' +
+    '<li>点击「保存」按钮</li>' +
+    '<li>创建完毕后，左侧边栏「通讯录」菜单会出现提醒：需要向创建的机器人发送任意消息，否则机器人无法向自己发送消息</li>' +
+    '</ol>' +
+    '<div class="muted" style="margin-top:10px">使用模式中「可使用权限」不需要添加授权。创建后将 Bot ID 与 Secret 填入本页配置并保存。</div>' +
     '</div>';
   $('#overlay3').style.display = 'block';
 }
@@ -3281,6 +3315,7 @@ async function saveWecomConf() {
 }
 
 $('#btnWecomSave').onclick = saveWecomConf;
+$('#btnWecomCreateHelp').onclick = openWecomCreateHelp;
 $('#btnWecomClear').onclick = async (e) => {
   const b = e.currentTarget;
   if (!b.dataset.armed) { armConfirm(b, '再次点击确认清除', 4); return; }
