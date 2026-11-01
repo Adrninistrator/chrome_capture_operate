@@ -19,9 +19,13 @@ GET /api/cookies/query?url=<URL或域名>[&profile=<Chrome实例编号>]
 ```
 
 - `url`：完整 URL（如 `https://www.example.com/api/data`）或域名/IP，需 URL 编码。
-- `profile`：Chrome 实例编号（多开区分，可选，默认 0 查所有实例——
-  查到即返回）。非 0 时仅在该编号实例的 Cookie 中查找；脚本需要
-  用特定账号登录态时传对应编号（编号见 Web 页面"Chrome进程多开"列表）。
+- `profile`：Chrome 实例编号（多开区分，可选）。
+  - `0`（默认）：查询所有实例并合并；同名 cookie（domain/path/name 相同）
+    按分区规则取一条，同优先级保留先出现的实例，因此可能混合不同实例的
+    账号；
+  - 非 `0`：仅在该编号实例中查找。
+  需要确定某个账号的登录态时必须指定对应编号（编号见 Web 页面
+  "Chrome进程多开"列表）。
 
 ### 返回的 Cookie 范围（匹配规则）
 
@@ -148,6 +152,9 @@ GET /api/cookies/cdp?url=<URL或域名>[&port=<CDP端口>]
 账号，回退会让脚本实际使用的身份与预期不一致；需要严格以抓包 Chrome 为准
 （例如自动登录脚本判断登录态）时，应只使用 `/api/cookies/cdp`，不得回退到
 日常 Chrome（否则可能因日常 Chrome 已登录而误判抓包 Chrome 已登录）。
+以上是**脚本侧**的选择策略：服务端两个接口相互独立，`/api/cookies/query`
+只读插件快照、`/api/cookies/cdp` 只读指定 CDP 端口，不会自动跨来源回退或
+合并。
 
 > AI Agent 亦可经 MCP 工具 `query_cookies_cdp`（chrome-operate）以同口径获取——无需直接调用本 HTTP 接口，纯 MCP 客户端也可用。
 

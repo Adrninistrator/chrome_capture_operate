@@ -155,8 +155,9 @@ class CookieStore:
     def query(self, url_or_host, profile_id=None):
         """按浏览器语义返回访问该主机时会携带的 cookie 列表。
 
-        profile_id 为空/None 时在所有 Chrome profile 中查找，查到即返回；
-        非空时仅在该编号实例中查找。
+        profile_id 为空/None/0 时合并所有 Chrome profile 的匹配 cookie
+        （同名 cookie 按分区规则取一条；同优先级保留先出现的实例，因此
+        可能混合不同实例的账号）；非 0 时仅在该编号实例中查找。
         返回 (cookies_list, error)。error 为 None 表示成功。
         """
         if not url_or_host:
