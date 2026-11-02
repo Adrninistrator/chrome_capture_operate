@@ -20,9 +20,9 @@ DEFAULT_ACTION_TIMEOUT_MS = 15000
 DEFAULT_TOTAL_TIMEOUT_MS = 60000
 
 ALLOWED_ACTIONS = {
-    "goto", "fill", "click", "press", "wait_for_selector", "wait_for_url",
-    "wait_for_load_state", "wait_for_timeout", "get_url", "get_text",
-    "get_title", "is_visible",
+    "goto", "reload", "fill", "click", "press", "wait_for_selector",
+    "wait_for_url", "wait_for_load_state", "wait_for_timeout", "get_url",
+    "get_text", "get_title", "is_visible",
 }
 _LOAD_STATES = {"load", "domcontentloaded", "networkidle"}
 _SELECTOR_STATES = {"attached", "detached", "visible", "hidden"}
@@ -148,6 +148,24 @@ def _check_host(url, expected_host):
             % (host or "（空）", expected_host))
 
 
+def _error_detail(action_type, exc):
+    """动作异常 -> 可返回给调用方的说明（fill 不回显原始信息）。
+
+    fill 的 Playwright 异常通常包含选择器与超时原因，但也可能与填入值
+    同处一条消息；这里只返回安全的分类说明，避免账号值泄漏。
+    """
+    if action_type != "fill":
+        return "：%s" % exc
+    low = str(exc).lower()
+    if "timeout" in low:
+        return "：等待输入框可填写超时（元素未出现、不可见或不可编辑）"
+    if ("not visible" in low or "not editable" in low
+            or "not attached" in low or "detached" in low
+            or "element is not" in low):
+        return "：输入框不可见/不可编辑"
+    return ""       # 其他未知异常不回显原始信息
+
+
 def _remaining_ms(deadline):
     return max(0, int((deadline - time.time()) * 1000))
 
@@ -254,6 +272,12 @@ def run_actions(cdp_port, url, expected_host, actions, timeout_ms, accounts):
                             _check_host(target, expected_host)
                             page.goto(target, wait_until="domcontentloaded",
                                       timeout=timeout)
+                            _check_host(page.url, expected_host)
+                        elif atype == "reload":
+                            # 刷新当前标签页：用于页面空白/“加载失败”后的重试
+                            _check_host(page.url, expected_host)
+                            page.reload(wait_until="domcontentloaded",
+                                        timeout=timeout)
                             _check_host(page.url, expected_host)
                         elif atype == "fill":
                             _check_host(page.url, expected_host)
@@ -372,10 +396,9 @@ def run_actions(cdp_port, url, expected_host, actions, timeout_ms, accounts):
                     except BrowserActionError:
                         raise
                     except PlaywrightError as e:
-                        # fill 的异常信息可能包含填入值，统一不返回原始信息
-                        detail = "" if atype == "fill" else "：%s" % e
                         raise BrowserActionError(
-                            "动作执行失败（%s）%s" % (atype, detail),
+                            "动作执行失败（%s）%s"
+                            % (atype, _error_detail(atype, e)),
                             action_index=i, action_type=atype,
                             url=page.url, results=results)
                     except Exception as e:

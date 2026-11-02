@@ -55,6 +55,7 @@ Content-Type: application/json
 | 动作 | 必填字段 | 说明 |
 |---|---|---|
 | `goto` | `url` | 打开/复用目标标签页并导航 |
+| `reload` | 无 | 刷新当前标签页（用于页面空白/“加载失败”后的重试） |
 | `fill` | `selector` + `value_from` 或 `value` | 填写输入框；账号字段用 `value_from` |
 | `click` | `selector` | 点击元素（支持 Playwright 选择器，如 `button:has-text('登录')`） |
 | `press` | `selector` + `key` | 按键，如 Enter |
@@ -137,6 +138,8 @@ Content-Type: application/json
 - 浏览器动作锁按 CDP 端口：同一实例串行（避免标签页互相干扰），
   不同实例可并发登录；
 - 目标 CDP 实例未启动时返回 400，应先调用 ensure；
+- 若 Chrome 窗口最小化/被遮挡导致页面延迟渲染，可在动作前调用
+  `POST /api/cdp-profiles/{port}/bring-to-front` 还原并置顶窗口；
 - 当前只操作主页面，暂不支持 iframe、新标签页切换、文件上传/下载；
 - 若登录流程跳转到其他主机（SSO），当前 `expected_host` 校验会拒绝，
   需要扩展允许的主机列表。

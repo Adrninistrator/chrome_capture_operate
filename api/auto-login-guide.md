@@ -250,6 +250,7 @@ Content-Type: application/json
 | 动作 | 必填字段 | 说明 |
 |---|---|---|
 | `goto` | `url` | 打开/复用目标标签页并导航 |
+| `reload` | 无 | 刷新当前标签页（页面空白/加载失败后的重试） |
 | `fill` | `selector` + `value_from` 或 `value` | 填写输入框；账号字段用 `value_from` |
 | `click` | `selector` | 点击元素（支持 Playwright 选择器，如 `button:has-text('登录')`） |
 | `press` | `selector` + `key` | 按键，如 Enter |
@@ -264,6 +265,14 @@ Content-Type: application/json
 
 等待类动作都支持 `continue_on_timeout: true`：超时后不终止整批动作，
 继续执行后续的 `get_url`/`get_text`，便于判断验证码或登录失败原因。
+
+> 登录表单等**必需元素不要设置** `continue_on_timeout`：未出现时应直接失败，
+> 否则会继续执行 `fill` 而只得到笼统的“动作执行失败（fill）”。若目标 Chrome
+> 窗口最小化/被遮挡，部分 SPA 可能延迟渲染表单（人工刷新后才正常），可在
+> 动作前调用 `POST /api/cdp-profiles/<端口>/bring-to-front` 将窗口还原置顶
+> （示例脚本已调用）。若首次打开页面出现空白/“加载失败”（表单等待超时或
+> `fill` 失败），可用 `reload` 刷新当前标签页（或重新 `goto` 同一 URL）
+> 并重试一次；仅限这两类早期失败，避免重复提交登录。
 
 > 本节示例中的登录网址、参数名称、选择器仅作示例。生成脚本时必须使用
 > 提示词中的“页面输入字段描述 -> 参数名称”映射和实际页面选择器，不要照抄
