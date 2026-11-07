@@ -540,17 +540,19 @@ button.btn.chrome-top:disabled { background: #ccd3da; color: #f4f6f8; cursor: de
 <script>
 const $ = s => document.querySelector(s);
 let curSession = null, curScript = null, execId = null, execTimer = null, curCaptureSession = null, histRecords = [], curScriptDir = null;
-let execDone = null, multiRun = null, execPrefix = '';
+let execDone = null, multiRun = null, execPrefix = '', execStarting = false;
 // d. 自动登录脚本提示词：扁平账号信息、本次页面的“页面输入字段描述 -> 参数名称”映射
 let loginAccounts = {}, loginSecretKeys = new Set(), loginConfPath = '', loginMappings = [];
 let loginPromptTemplate = '', loginBrowserApi = '', loginChromeStartApi = '', loginPromptReady = false;
 let loginCdpEnsureApi = '', loginCookiesCdpApi = '', loginCdpPort = 9222;
 let loginAccountName = '抓包实例', loginWecomDocPath = '';
-/* 执行/执行多次按钮的启用状态：选中脚本即可执行；执行多次期间
-   （multiRun）与任何一次执行进行中（execTimer）不允许再开始多次执行 */
+/* 执行/执行多次按钮的启用状态：选中脚本才可执行；只要处于「启动中、
+   单次执行中、执行多次中」任一状态，两个按钮都禁用，避免重复触发执行。
+   execStarting 覆盖点击到 /api/scripts/run 返回之间的短暂窗口期。 */
 function updateRunButtons() {
-  $('#btnRun').disabled = !curScript;
-  $('#btnRunMulti').disabled = !curScript || !!multiRun || !!execTimer;
+  const busy = !!multiRun || !!execTimer || execStarting;
+  $('#btnRun').disabled = !curScript || busy;
+  $('#btnRunMulti').disabled = !curScript || busy;
 }
 
 /* ---------- 基础 ---------- */
@@ -2757,13 +2759,26 @@ $('#btnRun').onclick = async () => {
    启动失败 resolve(null)。执行多次（runMulti）顺序 await 复用本函数 */
 function startExecOnce() {
   return new Promise(resolve => {
+    // 点击后立即禁用「执行/执行多次」，覆盖 API 返回前的窗口期，避免连点
+    execStarting = true;
+    updateRunButtons();
     api('/api/scripts/run', {method: 'POST', body: JSON.stringify({path: curScript})}).then(r => {
-      if (r.error) { toastMsg(r.error, 'err'); resolve(null); return; }
+      execStarting = false;
+      if (r.error) {
+        toastMsg(r.error, 'err');
+        updateRunButtons();
+        resolve(null);
+        return;
+      }
       execId = r.exec_id; execDone = resolve;
       $('#btnKill').style.display = 'none';
       $('#execState').textContent = '执行中…';
       execTimer = setInterval(pollExec, 1000); pollExec();
       updateRunButtons();
+    }).catch(() => {
+      execStarting = false;
+      updateRunButtons();
+      resolve(null);
     });
   });
 }

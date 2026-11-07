@@ -49,6 +49,7 @@ Content-Type: application/json
 | `expected_host` | 必填；主应用校验当前页面主机，防止误填到其他站点 |
 | `timeout_ms` | 整批动作总超时，默认 60000，最大 300000 |
 | `actions` | 按顺序执行的动作列表，最多 100 个 |
+| `activate_page` | 可选，默认 `true`：复用/新建标签页后调用 `page.bring_to_front()` 激活标签页与窗口。后台定时脚本可传 `false`：跳过该激活；没有匹配标签页时复用任意 http/https 标签页（不调用 `new_page()`，避免最小化窗口 restore 时“闪一下”）；`wait_for_selector` / `wait_for_load_state` / `wait_for_timeout` 按 500ms 分段轮询，每段之间把被 Chrome 抢走的前台焦点还给用户（仅 Chrome 窗口时恢复、0.5 秒节流、非 Windows 不生效） |
 
 ## 2. 动作
 
@@ -139,7 +140,9 @@ Content-Type: application/json
   不同实例可并发登录；
 - 目标 CDP 实例未启动时返回 400，应先调用 ensure；
 - 若 Chrome 窗口最小化/被遮挡导致页面延迟渲染，可在动作前调用
-  `POST /api/cdp-profiles/{port}/bring-to-front` 还原并置顶窗口；
+  `POST /api/cdp-profiles/{port}/bring-to-front` 还原并置顶窗口（会抢焦点，
+  后台脚本不建议）；或用 `reload` 动作刷新重试。传 `activate_page=false`
+  时主应用不会主动激活窗口；
 - 当前只操作主页面，暂不支持 iframe、新标签页切换、文件上传/下载；
 - 若登录流程跳转到其他主机（SSO），当前 `expected_host` 校验会拒绝，
   需要扩展允许的主机列表。

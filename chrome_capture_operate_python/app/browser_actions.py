@@ -6,7 +6,9 @@ Playwright 只在主应用内部使用，连接已运行的抓包 Chrome。
 动作中的账号值使用 ``value_from`` 指定全局配置 ``login_accounts`` 的参数名称，
 由主应用解析；生成脚本中不出现具体账号值。
 """
+import ctypes
 import logging
+import os
 import threading
 import time
 from urllib.parse import urlsplit
@@ -18,6 +20,24 @@ log = logging.getLogger("app.browser")
 MAX_ACTIONS = 100
 DEFAULT_ACTION_TIMEOUT_MS = 15000
 DEFAULT_TOTAL_TIMEOUT_MS = 60000
+
+# activate_page=False 时，页面登录/跳转仍可能被 Chrome 或页面 JS 激活窗口。
+# 此处记录调用前的前台窗口并在关键节点还回去；Windows 前台锁定用「模拟
+# 一次 ALT」解除（与 chrome_proc.bring_chrome_to_front 相同的成熟技巧）。
+_VK_MENU = 0x12
+_KEYEVENTF_KEYUP = 0x0002
+_CHROME_WND_CLASS = "Chrome_WidgetWin_1"
+_MIN_RESTORE_INTERVAL = 0.5      # 秒，避免反复激活时频繁模拟 ALT 干扰键盘
+
+if os.name == "nt":
+    _U32 = ctypes.windll.user32
+    _U32.GetForegroundWindow.restype = ctypes.c_void_p
+    _U32.IsWindow.argtypes = [ctypes.c_void_p]
+    _U32.SetForegroundWindow.argtypes = [ctypes.c_void_p]
+else:
+    _U32 = None
+
+_last_restore = [0.0]
 
 ALLOWED_ACTIONS = {
     "goto", "reload", "fill", "click", "press", "wait_for_selector",
@@ -36,6 +56,53 @@ _BROWSER_LOCKS_GUARD = threading.Lock()
 def _lock_for(cdp_port):
     with _BROWSER_LOCKS_GUARD:
         return _BROWSER_LOCKS.setdefault(int(cdp_port), threading.Lock())
+
+
+def _foreground_hwnd():
+    """返回当前前台窗口句柄；非 Windows 或异常返回 0。"""
+    if _U32 is None:
+        return 0
+    try:
+        return int(_U32.GetForegroundWindow() or 0)
+    except Exception:
+        return 0
+
+
+def _is_chrome_window(hwnd):
+    if _U32 is None or not hwnd:
+        return False
+    try:
+        buf = ctypes.create_unicode_buffer(128)
+        _U32.GetClassNameW(ctypes.c_void_p(hwnd), buf, 128)
+        return buf.value == _CHROME_WND_CLASS
+    except Exception:
+        return False
+
+
+def _restore_foreground(hwnd):
+    """activate_page=False 的兜底：仅当 Chrome 抢了前台时把焦点还回去。
+
+    - 原窗口已关闭、前台已是原窗口时不动作；
+    - 前台是用户自己切到的非 Chrome 窗口时不打扰（不强行拉回）；
+    - 0.5 秒节流，避免页面反复激活时频繁模拟 ALT 干扰用户键盘。
+    """
+    if _U32 is None or not hwnd:
+        return
+    try:
+        cur = int(_U32.GetForegroundWindow() or 0)
+        if cur == hwnd or not _U32.IsWindow(ctypes.c_void_p(hwnd)):
+            return
+        if not _is_chrome_window(cur):
+            return
+        now = time.time()
+        if now - _last_restore[0] < _MIN_RESTORE_INTERVAL:
+            return
+        _last_restore[0] = now
+        _U32.keybd_event(_VK_MENU, 0, 0, 0)
+        _U32.SetForegroundWindow(ctypes.c_void_p(hwnd))
+        _U32.keybd_event(_VK_MENU, 0, _KEYEVENTF_KEYUP, 0)
+    except Exception:
+        pass
 
 
 class BrowserActionError(Exception):
@@ -177,8 +244,12 @@ def _action_timeout(action, deadline):
     return max(1, min(timeout, _remaining_ms(deadline)))
 
 
-def _find_or_open_page(browser, url, timeout_ms):
-    """按 URL（协议+主机+端口）复用已有标签页，没有则新开。"""
+def _find_or_open_page(browser, url, timeout_ms, activate_page=True):
+    """按 URL（协议+主机+端口）复用已有标签页，没有则新开。
+
+    activate_page=False 时跳过 page.bring_to_front()：该调用在 Windows 上会
+    把 Chrome 窗口激活到前台，打断用户当前操作；CDP 动作本身不需要窗口在前台。
+    """
     target = urlsplit(url)
     tkey = (target.scheme.lower(), target.netloc.lower())
     exact = same_host = None
@@ -195,6 +266,21 @@ def _find_or_open_page(browser, url, timeout_ms):
             elif (u.scheme.lower(), u.netloc.lower()) == tkey:
                 same_host = same_host or pg
     page = exact or same_host
+    if page is None and not activate_page:
+        # 后台模式（activate_page=False）：没有同主机标签页时，复用任意
+        # http/https 标签页导航，避免 new_page() 让最小化的 Chrome 窗口
+        # restore（表现为窗口“闪一下”）。脚本首个动作本就是 goto 登录页。
+        for ctx in browser.contexts:
+            for pg in ctx.pages:
+                try:
+                    u = urlsplit(pg.url)
+                except ValueError:
+                    continue
+                if u.scheme in ("http", "https"):
+                    page = pg
+                    break
+            if page is not None:
+                break
     if page is None:
         if not browser.contexts:
             raise BrowserActionError(
@@ -203,7 +289,8 @@ def _find_or_open_page(browser, url, timeout_ms):
         page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
     elif page.url != url:
         page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
-    page.bring_to_front()
+    if activate_page:
+        page.bring_to_front()
     return page
 
 
@@ -216,8 +303,13 @@ def _resolve_fill_value(action, accounts):
     return "" if action.get("value") is None else str(action["value"])
 
 
-def run_actions(cdp_port, url, expected_host, actions, timeout_ms, accounts):
-    """连接抓包 Chrome 并顺序执行动作；返回结果或抛出 BrowserActionError。"""
+def run_actions(cdp_port, url, expected_host, actions, timeout_ms, accounts,
+                activate_page=True):
+    """连接抓包 Chrome 并顺序执行动作；返回结果或抛出 BrowserActionError。
+
+    activate_page=False 时不激活标签页/窗口（避免抢用户前台焦点），并在
+    页面创建、每个动作及等待期间把被 Chrome 抢走的前台焦点还给用户。
+    """
     url = str(url or "").strip()
     expected_host = str(expected_host or "").strip().lower()
     if not url or not expected_host:
@@ -239,6 +331,9 @@ def run_actions(cdp_port, url, expected_host, actions, timeout_ms, accounts):
     timeout_ms = min(timeout_ms, 300000)
     deadline = time.time() + timeout_ms / 1000.0
     results = []
+    # 动作开始前记录用户当前前台窗口：activate_page=False 时，页面登录/
+    # 跳转仍可能被 Chrome 或页面 JS 激活窗口，用于在各节点把焦点还回去。
+    restore_hwnd = _foreground_hwnd() if not activate_page else 0
 
     try:
         from playwright.sync_api import Error as PlaywrightError
@@ -255,10 +350,13 @@ def run_actions(cdp_port, url, expected_host, actions, timeout_ms, accounts):
                     "http://127.0.0.1:%d" % cdp_port,
                     timeout=min(timeout_ms, 30000))
                 page = _find_or_open_page(
-                    browser, url, min(timeout_ms, 30000))
+                    browser, url, min(timeout_ms, 30000), activate_page)
+                _restore_foreground(restore_hwnd)
                 _check_host(page.url, expected_host)
 
                 for i, action in enumerate(actions):
+                    # 覆盖上一动作期间（含页面跳转）发生的窗口激活
+                    _restore_foreground(restore_hwnd)
                     if _remaining_ms(deadline) <= 0:
                         raise BrowserActionError(
                             "浏览器动作总超时（%dms）" % timeout_ms,
@@ -296,25 +394,43 @@ def run_actions(cdp_port, url, expected_host, actions, timeout_ms, accounts):
                             _check_host(page.url, expected_host)
                             selector = str(action["selector"])
                             state = action.get("state") or "visible"
-                            try:
-                                page.wait_for_selector(
-                                    selector, state=state, timeout=timeout)
-                            except PlaywrightError:
-                                if action.get("continue_on_timeout"):
-                                    results.append({
-                                        "type": "wait_for_selector",
-                                        "selector": selector,
-                                        "state": state,
-                                        "timeout": True,
-                                    })
-                                else:
-                                    raise
-                            else:
+                            end = time.time() + timeout / 1000.0
+                            ok = False
+                            last_exc = None
+                            while time.time() < end:
+                                slice_ms = max(
+                                    1, min(500,
+                                           int((end - time.time()) * 1000)))
+                                try:
+                                    page.wait_for_selector(
+                                        selector, state=state,
+                                        timeout=slice_ms)
+                                    ok = True
+                                    break
+                                except PlaywrightError as exc:
+                                    last_exc = exc
+                                    # 分段等待期间被 Chrome 激活时及时还回焦点
+                                    _restore_foreground(restore_hwnd)
+                            if ok:
                                 results.append({
                                     "type": "wait_for_selector",
                                     "selector": selector,
                                     "state": state,
                                 })
+                            elif action.get("continue_on_timeout"):
+                                results.append({
+                                    "type": "wait_for_selector",
+                                    "selector": selector,
+                                    "state": state,
+                                    "timeout": True,
+                                })
+                            elif last_exc is not None:
+                                raise last_exc
+                            else:
+                                raise BrowserActionError(
+                                    "等待元素超时", action_index=i,
+                                    action_type=atype, url=page.url,
+                                    results=results)
                         elif atype == "wait_for_url":
                             contains = action.get("contains")
                             not_contains = action.get("not_contains")
@@ -328,6 +444,8 @@ def run_actions(cdp_port, url, expected_host, actions, timeout_ms, accounts):
                                 if ok:
                                     break
                                 page.wait_for_timeout(200)
+                                # 长等待期间登录跳转可能激活窗口，及时还回焦点
+                                _restore_foreground(restore_hwnd)
                             if not ok:
                                 if action.get("continue_on_timeout"):
                                     results.append({
@@ -351,27 +469,50 @@ def run_actions(cdp_port, url, expected_host, actions, timeout_ms, accounts):
                                 })
                         elif atype == "wait_for_load_state":
                             state = action.get("state") or "domcontentloaded"
-                            try:
-                                page.wait_for_load_state(
-                                    state, timeout=timeout)
-                            except PlaywrightError:
-                                if action.get("continue_on_timeout"):
-                                    results.append({
-                                        "type": "wait_for_load_state",
-                                        "state": state,
-                                        "timeout": True,
-                                    })
-                                else:
-                                    raise
-                            else:
+                            end = time.time() + timeout / 1000.0
+                            ok = False
+                            last_exc = None
+                            while time.time() < end:
+                                slice_ms = max(
+                                    1, min(500,
+                                           int((end - time.time()) * 1000)))
+                                try:
+                                    page.wait_for_load_state(
+                                        state, timeout=slice_ms)
+                                    ok = True
+                                    break
+                                except PlaywrightError as exc:
+                                    last_exc = exc
+                                    # 分段等待期间被 Chrome 激活时及时还回焦点
+                                    _restore_foreground(restore_hwnd)
+                            if ok:
                                 results.append({
                                     "type": "wait_for_load_state",
                                     "state": state,
                                 })
+                            elif action.get("continue_on_timeout"):
+                                results.append({
+                                    "type": "wait_for_load_state",
+                                    "state": state,
+                                    "timeout": True,
+                                })
+                            elif last_exc is not None:
+                                raise last_exc
+                            else:
+                                raise BrowserActionError(
+                                    "等待页面加载超时", action_index=i,
+                                    action_type=atype, url=page.url,
+                                    results=results)
                         elif atype == "wait_for_timeout":
                             ms = min(int(action["ms"]),
                                      _remaining_ms(deadline))
-                            page.wait_for_timeout(ms)
+                            end = time.time() + ms / 1000.0
+                            while time.time() < end:
+                                slice_ms = max(
+                                    1, min(500,
+                                           int((end - time.time()) * 1000)))
+                                page.wait_for_timeout(slice_ms)
+                                _restore_foreground(restore_hwnd)
                         elif atype == "get_url":
                             results.append({"type": "get_url",
                                             "url": page.url})
@@ -418,3 +559,6 @@ def run_actions(cdp_port, url, expected_host, actions, timeout_ms, accounts):
         except Exception as e:
             raise BrowserActionError(
                 "浏览器动作执行失败：%s" % e, status_code=500)
+        finally:
+            # 异常/超时路径也要把焦点还给用户
+            _restore_foreground(restore_hwnd)

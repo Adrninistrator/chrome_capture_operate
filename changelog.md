@@ -1,8 +1,14 @@
+# 20261107
+
+- 快速执行脚本页面点击「执行」后立即禁用「执行/执行多次」按钮，执行结束或启动失败后恢复；覆盖按钮点击到 `/api/scripts/run` 返回之间的窗口期，避免同一脚本被重复/并发触发
+- 新增 `/api/browser/actions` 可选字段 `activate_page`（默认 `true` 保持原行为）：为 `false` 时跳过 `page.bring_to_front()`，避免每次页面登录把 CDP Chrome 窗口激活到用户前台；`BrowserActionsBody` → `run_actions` → `_find_or_open_page` 全链路透传，`api/browser-actions.md` 补充字段与限制说明
+- 补充 `activate_page=false` 的前台窗口恢复兜底：登录成功跳转仍可能被 Chrome/页面 JS 激活窗口，`run_actions` 记录调用前的前台窗口，在页面创建、每个动作、长等待及整批结束时把被 Chrome 抢走的焦点还给用户（仅 Chrome 窗口时恢复、0.5 秒节流、非 Windows 不生效）；`api/browser-actions.md` 同步说明
+- 后台模式消除窗口“闪一下”：`activate_page=false` 且无匹配标签页时，复用任意 http/https 标签页导航而非 `new_page()`（避免最小化窗口被 restore）；`wait_for_selector` / `wait_for_load_state` / `wait_for_timeout` 改为 500ms 分段轮询，每段之间恢复前台焦点
+
 # 20261102
 
-- 修复自动登录脚本在目标 CDP Chrome 窗口最小化/被遮挡时登录表单延迟渲染、`fill` 失败的问题：示例登录脚本 `login.py` 在 ensure 后调用 `POST /api/cdp-profiles/{port}/bring-to-front` 还原并置顶窗口；登录表单的 `wait_for_selector` 不再 `continue_on_timeout`（未出现直接失败，避免继续 fill 得到笼统错误）
-- `fill` 动作失败时返回安全的分类说明（超时/不可见/不可编辑），仍不回显可能含账号值的原始异常；`api/auto-login-guide.md`、`api/browser-actions.md`、脚本 README/AI_CONTEXT 补充窗口置顶与必需元素等待建议
-- 浏览器动作新增 `reload`（刷新当前标签页）；两个示例登录脚本增加页面加载失败重试：首次打开页面空白/“加载失败”（`wait_for_selector` 超时或 `fill` 失败）时用 `reload` 刷新并重试一次，最终错误会同时包含首次与重试失败原因；仅限这两类早期失败，不重复提交登录
+- `fill` 动作失败时返回安全的分类说明（超时/不可见/不可编辑），仍不回显可能含账号值的原始异常；`api/auto-login-guide.md`、`api/browser-actions.md` 补充必需元素等待建议
+- 浏览器动作新增 `reload`（刷新当前标签页）
 
 # 20261030
 

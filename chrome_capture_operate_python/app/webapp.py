@@ -2162,6 +2162,9 @@ def create_app(tray_on_change=None, tray_notify=None):
         # 本方案的实例唯一标识就是端口）。都不传时使用配置的抓包端口。
         port: int | None = None
         cdp_profile_id: int | None = None
+        # 是否激活目标标签页/窗口：默认 true 保持原行为；后台脚本传 false，
+        # 避免 page.bring_to_front() 把 Chrome 窗口提到用户前台。
+        activate_page: bool = True
 
     @app.post("/api/browser/actions")
     async def browser_actions_run(body: BrowserActionsBody):
@@ -2198,7 +2201,7 @@ def create_app(tray_on_change=None, tray_notify=None):
             return await asyncio.to_thread(
                 browser_actions_mod.run_actions, target_port,
                 body.url, body.expected_host, actions, body.timeout_ms,
-                accounts)
+                accounts, body.activate_page)
         except browser_actions_mod.BrowserActionError as e:
             return JSONResponse(e.to_dict(), status_code=e.status_code)
         except Exception as e:
