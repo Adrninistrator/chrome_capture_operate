@@ -310,6 +310,7 @@ button.btn.chrome-top:disabled { background: #ccd3da; color: #f4f6f8; cursor: de
       <div class="row">
         <button class="btn" id="btnRun" disabled title="执行选中的py脚本（不传参，使用项目虚拟环境）">执行</button>
         <button class="btn" id="btnRunMulti" disabled title="弹出窗口输入执行次数（最多1000次），确认后依次执行多次（每次执行完毕后再开始下一次）">执行多次</button>
+        <button class="btn" id="btnRunConfig" disabled title="编辑该脚本的运行参数（同目录同名 .ini；每个参数支持中文说明）">运行参数</button>
         <button class="btn warn" id="btnKill" style="display:none" title="强制结束正在执行的py脚本进程；执行多次时同时中止后续次数">结束进程</button>
         <span id="execState" class="muted"></span>
       </div>
@@ -553,6 +554,7 @@ function updateRunButtons() {
   const busy = !!multiRun || !!execTimer || execStarting;
   $('#btnRun').disabled = !curScript || busy;
   $('#btnRunMulti').disabled = !curScript || busy;
+  $('#btnRunConfig').disabled = !curScript || busy;
 }
 
 /* ---------- 基础 ---------- */
@@ -1502,7 +1504,10 @@ async function viewScriptFile(path, ext) {
   const r = await api('/api/scripts/file?path=' + encodeURIComponent(path));
   if (r.error) { toastMsg(r.error, 'err'); return; }
   $('#popTitle').textContent = r.name;
-  const html = ext === '.py' ? highlightPython(r.content) : highlightMarkdown(r.content);
+  const e = String(ext || '').replace(/^\./, '');
+  const html = e === 'py' ? highlightPython(r.content)
+    : (e === 'md' ? highlightMarkdown(r.content)
+    : '<span style="white-space:pre-wrap">' + esc(r.content) + '</span>');
   $('#popBody').innerHTML = `<div class="pane"><pre>${html}</pre></div>`;
   $('#overlay').style.display = 'block';
 }
@@ -2648,14 +2653,29 @@ async function loadScripts() {
     curScriptDir = r.scripts[i].dir;
     $('#btnDelScriptDir').disabled = false;
     const pys = r.scripts[i].py_files;
+    const docs = r.scripts[i].doc_files || [];
+    const inis = (r.scripts[i].ini_files || []).map(p => ({
+      path: p.path, mtime: p.mtime,
+      kind: p.path.toLowerCase().endsWith('.ini.example') ? 'ini-example' : 'ini'
+    }));
     const files = pys.map(p => ({path: p.path, mtime: p.mtime, kind: 'py'}))
-      .concat((r.scripts[i].doc_files || []).map(p => ({path: p.path, mtime: p.mtime, kind: 'md'})));
-    $('#pyList').innerHTML = files.map(f =>
-      `<div class="item" data-p="${esc(f.path)}" data-kind="${f.kind}" ` +
-      `title="${f.kind === 'py' ? '单击选中用于执行，点"查看"打开内容' : '单击打开查看'}">` +
-      `<span class="badge ${f.kind}">${f.kind}</span> ${esc(f.path.split(/[\\/]/).pop())}` +
-      ` <span class="muted" style="float:right">${esc(f.mtime || '')}</span>` +
-      (f.kind === 'py' ? ' <button class="link ftray" title="将该脚本添加到系统托盘快速执行脚本菜单（托盘菜单点击即在新控制台窗口执行）">添加到托盘菜单</button>' : '') + (f.kind === 'py' ? ' <button class="link fview" title="查看该py脚本内容（语法高亮）">查看</button>' : '') + `</div>`).join('');
+      .concat(inis)
+      .concat(docs.map(p => ({path: p.path, mtime: p.mtime, kind: 'md'})));
+    $('#pyList').innerHTML = files.map(f => {
+      const name = f.path.split(/[\\/]/).pop();
+      const badge = f.kind === 'py' ? 'py'
+        : (f.kind === 'md' ? 'md'
+        : (f.kind === 'ini' ? 'ini' : 'ini示例'));
+      const tip = f.kind === 'py'
+        ? '单击选中用于执行，点「查看」打开内容'
+        : (f.kind === 'ini' ? '单击编辑该脚本的运行参数' : '单击打开查看');
+      return `<div class="item" data-p="${esc(f.path)}" data-kind="${f.kind}" title="${tip}">` +
+        `<span class="badge ${f.kind === 'py' ? 'py' : 'md'}">${badge}</span> ${esc(name)}` +
+        ` <span class="muted" style="float:right">${esc(f.mtime || '')}</span>` +
+        (f.kind === 'py' ? ' <button class="link ftray" title="将该脚本添加到系统托盘快速执行脚本菜单（托盘菜单点击即在新控制台窗口执行）">添加到托盘菜单</button>' : '') +
+        (f.kind === 'py' ? ' <button class="link fview" title="查看该py脚本内容（语法高亮）">查看</button>' : '') +
+        `</div>`;
+    }).join('');
     curScript = null; updateRunButtons();
     if (pys.length === 1) {
       // 只有一个 .py：直接可执行，无需手选
@@ -2668,13 +2688,24 @@ async function loadScripts() {
       // 多个 .py：提示先选中
       $('#pyHint').textContent = `该目录有 ${pys.length} 个 .py 文件，请选中要执行的一个`;
     } else {
-      $('#pyHint').textContent = '该目录下没有 .py 文件';
+      $('#pyHint').textContent = '该目录下没有 .py 文件（可查看 ini 配置）';
     }
     $('#pyList').querySelectorAll('.item').forEach(pe => {
       const kind = pe.dataset.kind;
       if (kind === 'md') {
         pe.style.cursor = 'pointer';
         pe.onclick = () => viewScriptFile(pe.dataset.p, 'md');
+      } else if (kind === 'ini') {
+        pe.style.cursor = 'pointer';
+        const pyPath = pe.dataset.p.replace(/\.ini$/i, '.py');
+        const hasPy = pys.some(p => p.path === pyPath);
+        pe.onclick = () => {
+          if (hasPy) openScriptIni(pyPath);
+          else viewScriptFile(pe.dataset.p, 'ini');
+        };
+      } else if (kind === 'ini-example') {
+        pe.style.cursor = 'pointer';
+        pe.onclick = () => viewScriptFile(pe.dataset.p, 'ini');
       } else {
         pe.onclick = () => {
           $('#pyList').querySelectorAll('.item').forEach(x => x.classList.remove('sel'));
@@ -2751,6 +2782,186 @@ $('#btnDelScriptDir').onclick = async () => {
   $('#execOut').textContent = ''; $('#execState').textContent = '';
   loadScripts();
 };
+/* ---------- 脚本运行参数（同目录同名 .ini） ---------- */
+/* 解析 INI：[section] + # 中文说明 + key = value；空行断开注释。 */
+function parseIniText(text) {
+  const fields = [], seen = new Set();
+  let section = '', comments = [];
+  const lines = String(text || '').split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i], line = raw.trim();
+    if (!line) { comments = []; continue; }
+    if (line.startsWith('#') || line.startsWith(';')) {
+      comments.push(line.slice(1).trim()); continue;
+    }
+    const sm = line.match(/^\[(.+)\]$/);
+    if (sm) { section = sm[1].trim(); comments = []; continue; }
+    const kv = line.match(/^([^=:]+?)\s*[=:]\s*(.*)$/);
+    if (!kv) throw new Error('第 ' + (i + 1) + ' 行无法解析：' + raw);
+    if (!section) throw new Error('第 ' + (i + 1) + ' 行参数必须位于 [section] 下');
+    const key = kv[1].trim();
+    if (!key) throw new Error('第 ' + (i + 1) + ' 行参数名为空');
+    const id = section + '\u0000' + key;
+    if (seen.has(id)) throw new Error('参数重复：' + section + ' / ' + key);
+    seen.add(id);
+    fields.push({section, key, value: kv[2].trim(), comment: comments.join(' ')});
+    comments = [];
+  }
+  return fields;
+}
+function buildIniText(fields) {
+  const out = [];
+  let section = null;
+  (fields || []).forEach(f => {
+    const sec = (f.section || 'params').trim() || 'params';
+    if (sec !== section) {
+      if (out.length) out.push('');
+      out.push('[' + sec + ']');
+      section = sec;
+    }
+    if (f.comment) out.push('# ' + f.comment);
+    out.push((f.key || '').trim() + ' = ' + (f.value == null ? '' : String(f.value)));
+  });
+  return out.length ? out.join('\n') + '\n' : '[params]\n';
+}
+async function openScriptIni(pyPath) {
+  const r = await api('/api/scripts/ini?path=' + encodeURIComponent(pyPath));
+  if (r.error) { toastMsg(r.error, 'err'); return; }
+  let fields = r.fields || [];
+  let mode = r.parse_error ? 'text' : 'form';
+  const iniPath = r.ini_path || '';
+  $('#popTitle').textContent = '运行参数：' + (pyPath.split(/[\\/]/).pop() || '');
+  $('#popBody').innerHTML =
+    '<div class="row" style="gap:10px;align-items:center;margin-bottom:8px;flex-wrap:wrap">' +
+    '<span class="muted">参数展示方式：</span>' +
+    '<label class="ck" title="按参数逐项展示：中文说明、参数名、值，适合日常修改">' +
+    '<input type="radio" name="iniViewMode" value="form"> 表单（逐项编辑）</label>' +
+    '<label class="ck" title="直接编辑 INI 源文本，适合批量修改或复制粘贴">' +
+    '<input type="radio" name="iniViewMode" value="text"> 文本（直接编辑 INI）</label>' +
+    '<span class="muted" id="iniPath" style="font-size:12px"></span>' +
+    '</div>' +
+    '<div class="muted" id="iniHint" style="margin-bottom:6px;font-size:12px">' +
+    '选择参数的展示方式：「表单」按参数逐项展示中文说明、参数名和值，适合日常修改；' +
+    '「文本」直接编辑 INI 源文本，适合批量修改或复制粘贴。' +
+    '保存后写入同目录同名 .ini；脚本需用 configparser 读取该文件才会生效。</div>' +
+    '<div id="iniFormView" style="max-height:52vh;overflow:auto"></div>' +
+    '<textarea id="iniTextView" spellcheck="false" style="display:none;width:100%;height:52vh;' +
+    'font-family:Consolas,monospace;font-size:13px"></textarea>' +
+    '<div class="row" style="margin-top:10px;gap:8px;align-items:center">' +
+    '<button class="btn primary" id="iniSave">保存</button>' +
+    '<button class="btn" id="iniAdd" title="新增一个参数（section 与最后一个参数相同）">新增参数</button>' +
+    '<button class="btn ghost" id="iniClose">关闭</button>' +
+    '<span class="muted" id="iniMsg"></span>' +
+    '</div>';
+  $('#iniPath').textContent = iniPath + (r.exists ? '' : '（尚未创建，保存后生成）');
+  if (r.parse_error) {
+    $('#iniHint').textContent = '文件解析失败，已切换到文本视图：' + r.parse_error;
+    $('#iniHint').style.color = '#b3392e';
+  }
+  const formView = $('#iniFormView'), textView = $('#iniTextView');
+
+  function setMode(next) {
+    mode = next;
+    document.querySelectorAll('#popBody input[name="iniViewMode"]').forEach(radio => {
+      radio.checked = radio.value === mode;
+    });
+    formView.style.display = mode === 'form' ? '' : 'none';
+    textView.style.display = mode === 'text' ? '' : 'none';
+  }
+  function renderFields() {
+    if (!fields.length) {
+      formView.innerHTML = '<div class="muted">（暂无参数，点击“新增参数”添加；' +
+        '也可以切换到文本视图直接编辑）</div>';
+      return;
+    }
+    let html = '', lastSection = null;
+    fields.forEach((f, i) => {
+      if (f.section !== lastSection) {
+        html += '<div class="muted" style="margin:8px 0 4px;font-weight:700">[' +
+          esc(f.section || 'params') + ']</div>';
+        lastSection = f.section;
+      }
+      html += '<div class="row ini-row" data-i="' + i + '" style="gap:6px;align-items:center;margin-bottom:6px">' +
+        '<input class="ini-comment" placeholder="中文说明" title="参数说明（写入 INI 的 # 注释）" value="' +
+        escAttr(f.comment || '') + '" style="width:220px">' +
+        '<input class="ini-key" placeholder="参数名" title="参数名（key）" value="' +
+        escAttr(f.key || '') + '" style="width:150px">' +
+        '<input class="ini-value" placeholder="值" title="参数值" value="' +
+        escAttr(f.value == null ? '' : f.value) + '" style="flex:1;min-width:120px">' +
+        '<button class="btn warn ini-del" title="删除该参数">删除</button>' +
+        '</div>';
+    });
+    formView.innerHTML = html;
+    formView.querySelectorAll('.ini-row').forEach(row => {
+      const i = +row.dataset.i;
+      row.querySelector('.ini-comment').oninput = e => { fields[i].comment = e.target.value; };
+      row.querySelector('.ini-key').oninput = e => { fields[i].key = e.target.value; };
+      row.querySelector('.ini-value').oninput = e => { fields[i].value = e.target.value; };
+      row.querySelector('.ini-del').onclick = () => { fields.splice(i, 1); renderFields(); };
+    });
+  }
+  document.querySelectorAll('#popBody input[name="iniViewMode"]').forEach(radio => {
+    radio.onchange = () => {
+      if (radio.value === 'form') {
+        if (mode === 'text') {
+          try { fields = parseIniText(textView.value); }
+          catch (e) {
+            $('#iniMsg').textContent = '解析失败，请先修正文本：' + e.message;
+            setMode('text');
+            return;
+          }
+        }
+        renderFields(); setMode('form');
+      } else {
+        if (mode === 'form') textView.value = buildIniText(fields);
+        setMode('text');
+      }
+    };
+  });
+  $('#iniAdd').onclick = () => {
+    if (mode === 'text') {
+      try { fields = parseIniText(textView.value); }
+      catch (e) { $('#iniMsg').textContent = '请先修正文本中的错误：' + e.message; return; }
+    }
+    const section = fields.length ? fields[fields.length - 1].section : 'params';
+    fields.push({section, key: '', value: '', comment: ''});
+    renderFields(); setMode('form');
+    const rows = formView.querySelectorAll('.ini-row');
+    const last = rows[rows.length - 1];
+    if (last) last.querySelector('.ini-key').focus();
+  };
+  $('#iniClose').onclick = () => closePop(true);
+  $('#iniSave').onclick = async () => {
+    let content;
+    if (mode === 'form') {
+      content = buildIniText(fields);
+      try { parseIniText(content); }
+      catch (e) { $('#iniMsg').textContent = '保存失败：' + e.message; return; }
+    } else {
+      content = textView.value;
+    }
+    $('#iniSave').disabled = true;
+    let res;
+    try {
+      res = await api('/api/scripts/ini', {method: 'PUT',
+        body: JSON.stringify({path: pyPath, content})});
+    } catch (e) {
+      res = {error: '请求失败：' + e};
+    } finally {
+      $('#iniSave').disabled = false;
+    }
+    if (res.error) { $('#iniMsg').textContent = res.error; return; }
+    toastMsg('运行参数已保存：' + res.ini_path.split(/[\\/]/).pop(), 'ok', 4000);
+    closePop(true);
+  };
+
+  textView.value = r.content || '';
+  renderFields();
+  setMode(mode);
+  $('#overlay').style.display = 'block';
+}
+$('#btnRunConfig').onclick = () => { if (curScript) openScriptIni(curScript); };
+
 $('#btnRun').onclick = async () => {
   execPrefix = '';
   await startExecOnce();

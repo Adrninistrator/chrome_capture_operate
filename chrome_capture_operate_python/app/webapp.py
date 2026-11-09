@@ -58,6 +58,65 @@ def _under_script_roots(p):
     return any(p.startswith(r + os.sep) for r in script_roots())
 
 
+# 脚本运行参数：foo.py 同目录的 foo.ini（[section] + # 中文说明 + key = value）
+_INI_MAX_BYTES = 256 * 1024
+
+
+def _script_ini_path(py_path):
+    """foo.py -> 同目录 foo.ini；只允许脚本根目录内已存在的 .py。"""
+    if not py_path:
+        return None
+    p = os.path.abspath(py_path)
+    if not p.lower().endswith(".py") or not os.path.isfile(p):
+        return None
+    if not _under_script_roots(p):
+        return None
+    return os.path.splitext(p)[0] + ".ini"
+
+
+def _parse_ini(content):
+    """解析 INI 文本，返回 (fields, error)。
+
+    fields 为 [{section, key, value, comment}]，保留出现顺序；comment 是
+    紧邻 key 上方、连续的 #/; 注释（空行会断开）。规则与 configparser
+    兼容：只支持 [section] + key=value（或 key: value）。
+    """
+    fields = []
+    section = ""
+    comments = []
+    seen = set()
+    for lineno, raw in enumerate(str(content or "").splitlines(), 1):
+        line = raw.strip()
+        if not line:
+            comments = []
+            continue
+        if line.startswith("#") or line.startswith(";"):
+            comments.append(line[1:].strip())
+            continue
+        m = re.match(r"^\[(.+)\]$", line)
+        if m:
+            section = m.group(1).strip()
+            comments = []
+            continue
+        m = re.match(r"^([^=:]+?)\s*[=:]\s*(.*)$", line)
+        if not m:
+            return None, "第 %d 行无法解析：%s" % (lineno, raw)
+        if not section:
+            return None, "第 %d 行参数必须位于 [section] 下" % lineno
+        key = m.group(1).strip()
+        if not key:
+            return None, "第 %d 行参数名为空" % lineno
+        ident = (section, key)
+        if ident in seen:
+            return None, "参数重复：%s / %s" % (section, key)
+        seen.add(ident)
+        fields.append({"section": section, "key": key,
+                       "value": m.group(2).strip(),
+                       "comment": " ".join(comments)})
+        comments = []
+    return fields, ""
+
+
 # ---------------- 登录账号信息（global_conf.json 的 login_accounts） ----------------
 # 纯扁平 Map：{"key": "value", ...}
 # key 整体作为参数名称，不拆分、不假设命名规则；普通 value 为明文；
@@ -1292,6 +1351,11 @@ def create_app(tray_on_change=None, tray_notify=None):
             "具体要求见后续描述\n"
             "## README.md\n"
             "说明当前脚本的作用、使用说明等\n"
+            "## 运行参数（可选，与 py 同名的 .ini）\n"
+            "运行参数不是必须的：脚本不需要可配置参数时不要生成配置文件。"
+            "如需要，使用与 py 同名的 .ini：[params] 下每行"
+            "# 中文说明 + key = value；脚本用 configparser 读取同目录同名 .ini，"
+            "文件不存在时使用内置默认值；参数值不要硬编码\n"
             "## baseline.md\n"
             "按 %s 的基线保存约定生成数据来源契约表，"
             "记录每个数据来源的参数格式、可选值、实测结果等\n"
@@ -1635,13 +1699,69 @@ def create_app(tray_on_change=None, tray_notify=None):
         p = os.path.abspath(path)
         if not _under_script_roots(p) or not os.path.isfile(p):
             return JSONResponse({"error": "文件不存在"}, status_code=404)
+        low = p.lower()
+        if not (low.endswith(".py") or low.endswith(".md")
+                or low.endswith(".ini") or low.endswith(".ini.example")):
+            return JSONResponse(
+                {"error": "仅支持查看 .py/.md/.ini/.ini.example 文件"},
+                status_code=400)
         ext = os.path.splitext(p)[1].lower()
-        if ext not in (".py", ".md"):
-            return JSONResponse({"error": "仅支持查看 .py/.md 文件"},
-                                status_code=400)
         with open(p, "r", encoding="utf-8", errors="replace") as f:
             return {"name": os.path.basename(p), "path": p,
                     "ext": ext, "content": f.read()}
+
+    class ScriptIniBody(BaseModel):
+        path: str
+        content: str
+
+    @app.get("/api/scripts/ini")
+    async def scripts_ini_get(path: str = Query(...)):
+        """读取脚本同目录同名 .ini；不存在时返回 [params] 空模板。"""
+        ini = _script_ini_path(path)
+        if not ini:
+            return JSONResponse(
+                {"error": "脚本不存在或不在允许的脚本目录内"},
+                status_code=404)
+        exists = os.path.isfile(ini)
+        if exists:
+            try:
+                with open(ini, "r", encoding="utf-8",
+                          errors="replace") as f:
+                    content = f.read()
+            except OSError as e:
+                return JSONResponse({"error": "读取运行参数失败：%s" % e},
+                                    status_code=500)
+        else:
+            content = "[params]\n"
+        fields, err = _parse_ini(content)
+        return {"path": path, "ini_path": ini, "exists": exists,
+                "content": content, "fields": fields or [],
+                "parse_error": err}
+
+    @app.put("/api/scripts/ini")
+    async def scripts_ini_put(body: ScriptIniBody):
+        """保存脚本运行参数：只允许同名 .ini，内容须为合法 INI。"""
+        ini = _script_ini_path(body.path)
+        if not ini:
+            return JSONResponse(
+                {"error": "脚本不存在或不在允许的脚本目录内"},
+                status_code=404)
+        content = body.content or ""
+        if len(content.encode("utf-8")) > _INI_MAX_BYTES:
+            return JSONResponse(
+                {"error": "运行参数文件过大（最多 %dKB）"
+                          % (_INI_MAX_BYTES // 1024)},
+                status_code=400)
+        fields, err = _parse_ini(content)
+        if err:
+            return JSONResponse({"error": err}, status_code=400)
+        try:
+            with open(ini, "w", encoding="utf-8", newline="\n") as f:
+                f.write(content)
+        except OSError as e:
+            return JSONResponse({"error": "保存运行参数失败：%s" % e},
+                                status_code=500)
+        return {"ok": True, "ini_path": ini, "fields": fields}
 
     # ---------------- 系统托盘快速执行脚本菜单（全局配置 tray_scripts） ----------------
     # 托盘菜单由 main.start_tray 读取该列表构建；增删后回调 tray_on_change
@@ -1905,6 +2025,11 @@ def create_app(tray_on_change=None, tray_notify=None):
                 os.path.abspath(API_DOC_PATH)),
             "## README.md",
             "说明当前脚本的作用、使用说明等",
+            "## 运行参数（可选，与 py 同名的 .ini）",
+            "运行参数不是必须的：脚本不需要可配置参数时不要生成配置文件。"
+            "如需要，使用与 py 同名的 .ini：[params] 下每行"
+            "# 中文说明 + key = value；脚本用 configparser 读取同目录同名 .ini，"
+            "文件不存在时使用内置默认值；参数值不要硬编码",
             "## baseline.md",
             "按以上 analysis-guide 建议方法的基线保存约定生成数据来源契约表，"
             "记录每个数据来源的参数格式、可选值、实测结果等",

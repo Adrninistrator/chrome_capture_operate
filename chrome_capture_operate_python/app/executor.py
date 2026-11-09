@@ -241,18 +241,21 @@ def list_scripts():
             dpath = os.path.join(root, d)
             if not os.path.isdir(dpath):
                 continue
-            pys, docs, readme = [], [], None
+            pys, docs, inis, readme = [], [], [], None
             for f in sorted(os.listdir(dpath)):
                 fp = os.path.join(dpath, f)
-                if f.endswith(".py"):
+                low = f.lower()
+                if low.endswith(".py"):
                     pys.append({"path": fp, "mtime": _file_mtime(fp)})
-                elif f.lower().endswith(".md"):
+                elif low.endswith(".md"):
                     docs.append({"path": fp, "mtime": _file_mtime(fp)})
-                    if f.lower() == "readme.md":
+                    if low == "readme.md":
                         readme = fp
+                elif low.endswith(".ini") or low.endswith(".ini.example"):
+                    inis.append({"path": fp, "mtime": _file_mtime(fp)})
             result.append({"dir": dpath, "category": category,
                            "py_files": pys, "doc_files": docs,
-                           "readme": readme})
+                           "ini_files": inis, "readme": readme})
     return result
 
 
