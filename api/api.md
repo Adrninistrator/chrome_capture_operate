@@ -261,3 +261,35 @@ def main():
 if __name__ == "__main__":
     main()
 ```
+
+## 5. 在日常使用的 Chrome 打开 URL
+
+```
+POST /api/chrome/open_url
+Content-Type: application/json
+
+{"url": "https://www.example.com/path", "profile": 0}
+```
+
+- `url`：必填，http/https 完整地址；其他协议返回 400。
+- `profile`：可选，默认 `0`：
+  - `0`：日常使用的 Chrome 默认 profile（与托盘「打开页面」同一行为）；
+  - 非 `0`：`Chrome 进程多开` 页面的实例编号（`GET /api/multi-profiles`
+    可查），使用该实例的数据目录启动/转交 URL；编号不存在返回 404。
+- 返回：
+
+```json
+{"ok": true, "profile": 0, "opened_in_chrome": true,
+ "message": "已用日常 Chrome 打开"}
+```
+
+  - `profile=0` 且未找到 Chrome 时会退回默认浏览器，此时
+    `opened_in_chrome=false`，`message` 说明已用默认浏览器打开；
+  - `profile` 非 0 返回 `{ok, profile, message}`，`ok=false` 时 `message`
+    为启动失败原因。
+
+注意：
+
+- 该接口会打开/激活可见的 Chrome 窗口，可能抢走当前焦点，后台脚本不应使用；
+- 不会复制日常 Chrome 的收藏夹/历史到多开实例（实例创建时已复制）；
+- 服务仅监听 `127.0.0.1`。

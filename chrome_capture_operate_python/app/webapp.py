@@ -770,6 +770,44 @@ def create_app(tray_on_change=None, tray_notify=None):
         log.info("删除多开实例: 编号%d", profile_id)
         return {"ok": True}
 
+    class OpenUrlBody(BaseModel):
+        url: str
+        profile: int = 0
+
+    @app.post("/api/chrome/open_url")
+    async def chrome_open_url(body: OpenUrlBody):
+        """在日常使用的 Chrome 中打开 URL。
+
+        profile=0（默认）用日常 Chrome 的默认 profile；非 0 为「Chrome
+        进程多开」页面的实例编号，使用该实例的数据目录启动/转交 URL。
+        """
+        target = (body.url or "").strip()
+        parts = urlsplit(target)
+        if parts.scheme not in ("http", "https") or not parts.netloc:
+            return JSONResponse({"error": "url 必须是 http/https 完整地址"},
+                                status_code=400)
+        try:
+            profile = int(body.profile or 0)
+        except (TypeError, ValueError):
+            return JSONResponse({"error": "profile 必须是非负整数"},
+                                status_code=400)
+        if profile < 0:
+            return JSONResponse({"error": "profile 必须是非负整数"},
+                                status_code=400)
+        if profile == 0:
+            ok = await asyncio.to_thread(chrome_proc.open_in_chrome, target)
+            return {"ok": True, "profile": 0, "opened_in_chrome": bool(ok),
+                    "message": ("已用日常 Chrome 打开"
+                                if ok else "未找到 Chrome，已用默认浏览器打开")}
+        items = _multi_profiles()
+        item = next((it for it in items if it.get("id") == profile), None)
+        if not item:
+            return JSONResponse({"error": "profile 不存在：%d" % profile},
+                                status_code=404)
+        ok, msg = await asyncio.to_thread(
+            chrome_proc.start_chrome_with_profile, item["dir"], url=target)
+        return {"ok": bool(ok), "profile": profile, "message": msg}
+
 
     # ---------------- CDP Chrome 实例（多账号自动登录） ----------------
     # 配置存全局配置 cdp_chrome_profiles：[{name, port, profile_dir,

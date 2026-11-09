@@ -156,10 +156,12 @@ def _probe_cdp(cdp_port):
 # my_profile，见 docs/design-profile-id.md 的实测结论与最终方案）。
 
 
-def start_chrome_with_profile(user_data_dir, cdp_port=None):
+def start_chrome_with_profile(user_data_dir, cdp_port=None, url=None):
     """以指定数据存储目录启动一个 Chrome 实例（多开）。
 
     cdp_port 为 None 时不带调试端口（多开实例仅登录/供 Cookie，不抓包）。
+    url 不为空时在启动/转交时打开该地址（实例已运行时 Chrome 会把 URL
+    转交给同一数据目录的已运行实例并打开标签页）。
     返回 (ok, message)。不检查端口占用。
     """
     chrome = find_chrome()
@@ -174,6 +176,8 @@ def start_chrome_with_profile(user_data_dir, cdp_port=None):
     ]
     if cdp_port:
         args.append("--remote-debugging-port=%d" % cdp_port)
+    if url:
+        args.append(url)
     try:
         subprocess.Popen(
             args,
