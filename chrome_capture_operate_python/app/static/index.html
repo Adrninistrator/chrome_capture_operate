@@ -2697,12 +2697,7 @@ async function loadScripts() {
         pe.onclick = () => viewScriptFile(pe.dataset.p, 'md');
       } else if (kind === 'ini') {
         pe.style.cursor = 'pointer';
-        const pyPath = pe.dataset.p.replace(/\.ini$/i, '.py');
-        const hasPy = pys.some(p => p.path === pyPath);
-        pe.onclick = () => {
-          if (hasPy) openScriptIni(pyPath);
-          else viewScriptFile(pe.dataset.p, 'ini');
-        };
+        pe.onclick = () => openScriptIni(pe.dataset.p);
       } else if (kind === 'ini-example') {
         pe.style.cursor = 'pointer';
         pe.onclick = () => viewScriptFile(pe.dataset.p, 'ini');
@@ -2824,13 +2819,14 @@ function buildIniText(fields) {
   });
   return out.length ? out.join('\n') + '\n' : '[params]\n';
 }
-async function openScriptIni(pyPath) {
-  const r = await api('/api/scripts/ini?path=' + encodeURIComponent(pyPath));
+async function openScriptIni(targetPath) {
+  const r = await api('/api/scripts/ini?path=' + encodeURIComponent(targetPath));
   if (r.error) { toastMsg(r.error, 'err'); return; }
   let fields = r.fields || [];
   let mode = r.parse_error ? 'text' : 'form';
   const iniPath = r.ini_path || '';
-  $('#popTitle').textContent = '运行参数：' + (pyPath.split(/[\\/]/).pop() || '');
+  const iniName = (iniPath || targetPath).split(/[\\/]/).pop() || '';
+  $('#popTitle').textContent = '运行参数：' + iniName;
   $('#popBody').innerHTML =
     '<div class="row" style="gap:10px;align-items:center;margin-bottom:8px;flex-wrap:wrap">' +
     '<span class="muted">参数展示方式：</span>' +
@@ -2844,6 +2840,8 @@ async function openScriptIni(pyPath) {
     '选择参数的展示方式：「表单」按参数逐项展示中文说明、参数名和值，适合日常修改；' +
     '「文本」直接编辑 INI 源文本，适合批量修改或复制粘贴。' +
     '保存后写入同目录同名 .ini；脚本需用 configparser 读取该文件才会生效。</div>' +
+    '<div id="iniWarn" style="display:none;margin-bottom:6px;font-size:12px;' +
+    'color:#b3392e;font-weight:700"></div>' +
     '<div id="iniFormView" style="max-height:52vh;overflow:auto"></div>' +
     '<textarea id="iniTextView" spellcheck="false" style="display:none;width:100%;height:52vh;' +
     'font-family:Consolas,monospace;font-size:13px"></textarea>' +
@@ -2854,11 +2852,20 @@ async function openScriptIni(pyPath) {
     '<span class="muted" id="iniMsg"></span>' +
     '</div>';
   $('#iniPath').textContent = iniPath + (r.exists ? '' : '（尚未创建，保存后生成）');
-  if (r.parse_error) {
-    $('#iniHint').textContent = '文件解析失败，已切换到文本视图：' + r.parse_error;
-    $('#iniHint').style.color = '#b3392e';
-  }
   const formView = $('#iniFormView'), textView = $('#iniTextView');
+  function showWarn(msg) {
+    const el = $('#iniWarn');
+    if (!el) return;
+    if (!msg) { el.style.display = 'none'; el.textContent = ''; return; }
+    el.style.display = '';
+    el.textContent = msg;
+  }
+  textView.oninput = () => { if (mode === 'text') showWarn(''); };
+  if (r.parse_error) {
+    mode = 'text';
+    showWarn('该文件不符合「表单」视图的 INI 格式，已切换到文本视图。原因：' +
+      r.parse_error + '。可直接编辑文本后保存，保存时会再次校验，不会影响脚本运行。');
+  }
 
   function setMode(next) {
     mode = next;
@@ -2907,10 +2914,13 @@ async function openScriptIni(pyPath) {
           try { fields = parseIniText(textView.value); }
           catch (e) {
             $('#iniMsg').textContent = '解析失败，请先修正文本：' + e.message;
+            showWarn('无法切换到表单视图：' + e.message +
+                     '。请先在文本视图修正格式。');
             setMode('text');
             return;
           }
         }
+        showWarn('');
         renderFields(); setMode('form');
       } else {
         if (mode === 'form') textView.value = buildIniText(fields);
@@ -2921,8 +2931,13 @@ async function openScriptIni(pyPath) {
   $('#iniAdd').onclick = () => {
     if (mode === 'text') {
       try { fields = parseIniText(textView.value); }
-      catch (e) { $('#iniMsg').textContent = '请先修正文本中的错误：' + e.message; return; }
+      catch (e) {
+        $('#iniMsg').textContent = '请先修正文本中的错误：' + e.message;
+        showWarn('无法新增参数：' + e.message + '。请先在文本视图修正格式。');
+        return;
+      }
     }
+    showWarn('');
     const section = fields.length ? fields[fields.length - 1].section : 'params';
     fields.push({section, key: '', value: '', comment: ''});
     renderFields(); setMode('form');
@@ -2936,7 +2951,11 @@ async function openScriptIni(pyPath) {
     if (mode === 'form') {
       content = buildIniText(fields);
       try { parseIniText(content); }
-      catch (e) { $('#iniMsg').textContent = '保存失败：' + e.message; return; }
+      catch (e) {
+        $('#iniMsg').textContent = '保存失败：' + e.message;
+        showWarn('保存失败：' + e.message);
+        return;
+      }
     } else {
       content = textView.value;
     }
@@ -2944,13 +2963,17 @@ async function openScriptIni(pyPath) {
     let res;
     try {
       res = await api('/api/scripts/ini', {method: 'PUT',
-        body: JSON.stringify({path: pyPath, content})});
+        body: JSON.stringify({path: targetPath, content})});
     } catch (e) {
       res = {error: '请求失败：' + e};
     } finally {
       $('#iniSave').disabled = false;
     }
-    if (res.error) { $('#iniMsg').textContent = res.error; return; }
+    if (res.error) {
+      $('#iniMsg').textContent = res.error;
+      showWarn('保存失败：' + res.error);
+      return;
+    }
     toastMsg('运行参数已保存：' + res.ini_path.split(/[\\/]/).pop(), 'ok', 4000);
     closePop(true);
   };

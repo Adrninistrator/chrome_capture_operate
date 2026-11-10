@@ -62,14 +62,22 @@ def _under_script_roots(p):
 _INI_MAX_BYTES = 256 * 1024
 
 
-def _script_ini_path(py_path):
-    """foo.py -> 同目录 foo.ini；只允许脚本根目录内已存在的 .py。"""
-    if not py_path:
+def _script_ini_path(target_path):
+    """解析运行参数文件路径。
+
+    - 传 `.ini`（非 `.ini.example`）：直接使用该文件（脚本目录内必须存在），
+      支持多个脚本共用同一份配置；
+    - 传 `.py`：映射同目录同名 `.ini`（兼容「运行参数」按钮）。
+    """
+    if not target_path:
         return None
-    p = os.path.abspath(py_path)
-    if not p.lower().endswith(".py") or not os.path.isfile(p):
-        return None
+    p = os.path.abspath(target_path)
     if not _under_script_roots(p):
+        return None
+    low = p.lower()
+    if low.endswith(".ini") and not low.endswith(".ini.example"):
+        return p if os.path.isfile(p) else None
+    if not low.endswith(".py") or not os.path.isfile(p):
         return None
     return os.path.splitext(p)[0] + ".ini"
 
@@ -1754,7 +1762,7 @@ def create_app(tray_on_change=None, tray_notify=None):
 
     @app.get("/api/scripts/ini")
     async def scripts_ini_get(path: str = Query(...)):
-        """读取脚本同目录同名 .ini；不存在时返回 [params] 空模板。"""
+        """读取运行参数：path 可为 .py（映射同名 .ini）或 .ini 本身。"""
         ini = _script_ini_path(path)
         if not ini:
             return JSONResponse(
@@ -1778,7 +1786,7 @@ def create_app(tray_on_change=None, tray_notify=None):
 
     @app.put("/api/scripts/ini")
     async def scripts_ini_put(body: ScriptIniBody):
-        """保存脚本运行参数：只允许同名 .ini，内容须为合法 INI。"""
+        """保存运行参数：path 可为 .py（映射同名 .ini）或 .ini 本身。"""
         ini = _script_ini_path(body.path)
         if not ini:
             return JSONResponse(
